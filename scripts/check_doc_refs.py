@@ -194,6 +194,49 @@ DESIGN DECISIONS (each one is deliberate -- read before "fixing" a FP/FN)
       follow-up could externalize `EXTERNAL_REPOS` into a small config file
       without changing the mechanism, if a team wants declarations added
       without touching this script.
+   i. TEMPLATE-BRACKET PREFIX: `_PATH_TOKEN_RE`'s lookbehind excludes `>`
+      and `}` (the closing halves of a `<placeholder>` or
+      `${VAR}`/`{{VAR}}` template token) alongside its pre-existing `/`
+      exclusion, so a match can never start immediately after either --
+      `<this-pack>/docs/x.yaml` and `${CLAUDE_PLUGIN_ROOT}/rest.py` are
+      refused the same way `/`-preceded starts always were (there's
+      already a `/` right after the closing bracket in every real
+      occurrence in this corpus, so the pre-existing `/` exclusion alone
+      would already catch those two specific examples -- adding `>`/`}`
+      to the SAME set is what additionally covers a bracket immediately
+      followed by NO separating `/` (`${VAR}rest.py`), which the
+      `/`-exclusion alone cannot reach). An earlier revision of this
+      mechanism was a separate, parallel post-hoc check (walk backward
+      from the match, strip trailing `/`, check for a trailing `>`/`}`)
+      -- removed after mutation-testing it and discovering the check
+      never actually fired on any real or planted fixture: the
+      pre-existing `/` exclusion silently did all the work first, every
+      time, for every shape this corpus actually contains. Keeping dead
+      code that merely resembled a working exemption would have been
+      exactly the "looks installed, enforces nothing" shape this repo's
+      own guards exist to catch elsewhere. Folding the two closing-bracket
+      characters into the SAME lookbehind the `/` exclusion already lives
+      in is the version that is both correct (covers the no-slash case
+      too) and honest (one exclusion set, doing visibly one job).
+   j. CREATING-COMMAND TARGET (`_CREATING_COMMAND_TAIL_RE`): a citation is
+      the TARGET of a file-creating shell command -- a redirect (`>`/`>>`,
+      excluding fd-redirects like `2>`/`&>` and `->`/`→`-style arrows via
+      an explicit lookbehind), `cat >`/`cat >>`, or the destination
+      argument of `cp SRC DEST` -- when the text between the start of the
+      line and this citation, with only whitespace/quotes in between, ends
+      in one of those shapes. Found empirically:
+      `examples/05_no_bash_test_deletion/run.sh` /
+      `examples/06_no_bash_test_mutation/run.sh` (`> $FIXTURE/...`,
+      `cat > tests/test_foo.py <<'EOF'`) and INSTALL.md's PROVE-IT
+      walkthrough (`printf ... > src/foo.py`,
+      `cp src/foo.py docs/notes/foo.py`). This generalizes past
+      `PLACEHOLDER_BASENAMES` (§3f) on purpose: a NEW worked example that
+      creates-then-cites a filename not yet in that curated set is still
+      caught structurally, without needing the set edited. The two
+      mechanisms are complementary, not redundant --
+      `PLACEHOLDER_BASENAMES` also catches a bare MENTION of a known
+      fixture name with no creating command nearby in the same file
+      (e.g. a table row referencing `tests/test_foo.py` in prose).
 
    KNOWN RESIDUAL FALSE-POSITIVE CATEGORY (not suppressed, by design): a
    well-known ecosystem convention name (real occurrences in this corpus
@@ -334,7 +377,11 @@ _CITED_EXT_ALT = (
 # stop `*_test.go`/`test_*.py` fragments (see docstring §3a), the last two
 # stop the regex from starting mid-token.
 _PATH_TOKEN_RE = re.compile(
-    r"(?<![\w./*?\[\]-])"
+    # ">" and "}" (the closing halves of a "<placeholder>" or
+    # "${VAR}"/"{{VAR}}" template token, see docstring §3i) are excluded
+    # here too, alongside the pre-existing glob/word/./'/'-' exclusions --
+    # a match can never start immediately after one.
+    r"(?<![\w./*?\[\]>}-])"
     # Trailing basename must END in an alnum/underscore right before the
     # extension dot (not '-' or '.') -- rules out prose like "non-.py files"
     # matching a bogus "non-.py" token.
@@ -371,15 +418,6 @@ EXTERNAL_REPOS = (
         "prefixes": ("packages/", "dsh-scan/", "docs/user/", "examples/acp-agent/", "apps/"),
     },
 )
-
-# A citation immediately preceded by a closing bracket (">" or "}") that
-# closes an earlier "<placeholder>" or "${VAR}"/"{{VAR}}" template token is
-# a substitution site, not a literal path -- see docstring §3i.
-# `${CLAUDE_PLUGIN_ROOT}/rest` and `<this-pack>/rest` both have the bracket
-# characters excluded from the path-token charclass, so the match starts
-# AFTER the closing bracket (and after any '/' immediately following it,
-# which is checked separately below) rather than including it.
-_TEMPLATE_BRACKET_CLOSERS = (">", "}")
 
 # A line matching one of these, with only whitespace/quotes between the end
 # of the match and the citation, means the citation is the TARGET of a
@@ -620,8 +658,6 @@ def _extract_hits_from_line(line, lineno, citing_path):
             if _SHELL_VAR_LEADING_SEGMENT_RE.match(leading):
                 continue  # shell/env variable expansion -- see docstring §3g
         prefix_text = clean[:start]
-        if prefix_text.rstrip("/").endswith(_TEMPLATE_BRACKET_CLOSERS):
-            continue  # closes a <placeholder>/${VAR} template -- see docstring §3i
         if _CREATING_COMMAND_TAIL_RE.search(prefix_text):
             continue  # target of a file-creating command -- see docstring §3j
         yield lineno, m.group(1), line.strip()

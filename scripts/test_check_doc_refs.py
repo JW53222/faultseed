@@ -369,9 +369,14 @@ def test_external_repo_declaration_does_not_exempt_unlisted_prefixes(tmp_path):
 
 def test_angle_bracket_template_prefix_exempted(tmp_path):
     # <this-pack>/docs/x.yaml -- the '<...>' prefix is a reader-substituted
-    # placeholder, not a literal path. real_target.yaml would resolve fine
-    # regardless (proving the mechanism doesn't just get lucky on real
-    # files), so use a name that would ONLY resolve if the exemption fires.
+    # placeholder, not a literal path. Handled by the SAME '/'-exclusion in
+    # _PATH_TOKEN_RE's lookbehind that already stops a match from starting
+    # mid-path (a match can never start right after '/', and there is
+    # always a '/' between the closing '>' and the real sub-path in this
+    # corpus's actual usage) -- no separate bracket-specific mechanism was
+    # needed for THIS shape. See test_no_slash_template_prefix_exempted
+    # below for the shape that actually needs the '>'/'}' lookbehind
+    # exclusion to fire.
     root = _init_repo(tmp_path, {
         "doc.md": "cp <this-pack>/docs/nonexistent_target.yaml <your-repo>/docs/nonexistent_target.yaml\n",
     })
@@ -383,7 +388,9 @@ def test_angle_bracket_template_prefix_exempted(tmp_path):
 
 def test_curly_brace_template_prefix_exempted(tmp_path):
     # ${CLAUDE_PLUGIN_ROOT}/sub/nonexistent.py -- verbatim shape from
-    # adapters/dsh/README.md's substituteCommand discussion.
+    # adapters/dsh/README.md's substituteCommand discussion. Same as the
+    # angle-bracket case above: the '/'-exclusion in the lookbehind already
+    # covers this, since there's a '/' between '}' and the real sub-path.
     root = _init_repo(tmp_path, {
         "doc.md": "This substitutes `${CLAUDE_PLUGIN_ROOT}/sub/nonexistent.py` in every command.\n",
     })
@@ -392,16 +399,32 @@ def test_curly_brace_template_prefix_exempted(tmp_path):
     assert result.exit_code == cdr.EXIT_CLEAN
 
 
-def test_real_arrow_notation_not_mistaken_for_template_close(tmp_path):
-    # "->"/"→" rename-notation must NOT be treated as a template-bracket
-    # closer -- a genuinely dangling citation right after an arrow must
-    # still be flagged. (The '>' in "->" is excluded by the '-' lookbehind
-    # on the creating-command redirect check; this test targets the
-    # SEPARATE bracket-closer check, which has no such exclusion, so it
-    # covers a different code path than the arrow tests near the redirect
-    # mechanism below.)
+def test_no_slash_template_prefix_exempted(tmp_path):
+    # "${VAR}rest.py" -- NO separating '/' between the closing brace and
+    # the rest of the token. This is the shape that actually requires the
+    # dedicated '>'/'}' exclusion in _PATH_TOKEN_RE's lookbehind (the
+    # pre-existing '/'-exclusion alone does NOT cover it, since there is no
+    # '/' immediately before "rest.py" here) -- not observed verbatim in
+    # this corpus, but the mechanism must not depend on every template
+    # reference happening to include a trailing slash.
     root = _init_repo(tmp_path, {
-        "doc.md": "Renamed old/thing.py -> sub/genuinely_missing.py in this pass.\n",
+        "doc.md": "Reads `${SOME_VAR}nonexistent_no_slash.py` directly.\n",
+    })
+    result = cdr.scan(root)
+    assert "nonexistent_no_slash.py" not in _cited(result)
+    assert result.exit_code == cdr.EXIT_CLEAN
+
+
+def test_arrow_notation_with_intervening_prose_not_exempted(tmp_path):
+    # "->" followed by prose text (not directly adjacent to the citation)
+    # must not exempt an adjacent real citation either -- the citation is
+    # preceded by a plain space, not '>'/'}'/'/', so the lookbehind exclusion
+    # doesn't apply, and the creating-command check is end-anchored (any
+    # non-whitespace text between '->' and the citation defeats it) so it
+    # doesn't fire here either. See test_arrow_notation_not_mistaken_for_redirect
+    # below for the directly-adjacent '->' case.
+    root = _init_repo(tmp_path, {
+        "doc.md": "Renamed old/thing.py -> now see sub/genuinely_missing.py in this pass.\n",
     })
     result = cdr.scan(root)
     assert "sub/genuinely_missing.py" in {h.cited for h in result.hits}

@@ -35,6 +35,7 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 HOOK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "no_swallowed_errors.py")
 
@@ -49,14 +50,21 @@ def _env(tmp_path, **extra):
     return env
 
 
-def _run_write(tmp_path, rel_path, content, **env_extra):
-    """Write event -- content is the whole post-edit file, no disk read needed."""
+def _run_write(tmp_path, rel_path, content, hook_path=None, **env_extra):
+    """Write event -- content is the whole post-edit file, no disk read needed.
+
+    `hook_path` defaults to this repo's real HOOK (every existing caller's
+    behavior, unchanged); a caller may pass a different on-disk copy of the
+    hook instead -- see test_generated_paths_exemption_actually_reaches_the_hook,
+    which needs to run a COPY of the hook from inside tmp_path so its
+    _AUDIT_SCOPE_ROOT-relative audit-scope.yaml lookup resolves to a
+    synthetic, tmp_path-local config instead of this repo's real one."""
     ev = json.dumps({
         "tool_name": "Write",
         "tool_input": {"file_path": rel_path, "content": content},
     })
     return subprocess.run(
-        [sys.executable, HOOK], input=ev, text=True, capture_output=True,
+        [sys.executable, hook_path or HOOK], input=ev, text=True, capture_output=True,
         cwd=str(tmp_path), env=_env(tmp_path, **env_extra),
     )
 
@@ -363,41 +371,45 @@ def test_generated_paths_exemption_actually_reaches_the_hook(tmp_path):
     the exemption is wired into no_swallowed_errors.py's actual gate order,
     not just correct in isolation.
 
-    Uses a real subprocess invocation of the hook (like every other test in
-    this file) with CLAUDE_PROJECT_DIR pointed at the synthetic repo -- this
-    one does NOT need the _fresh_common_module in-process trick above,
-    because _AUDIT_SCOPE_ROOT resolves relative to THIS repo's real
-    .claude/hooks/_common.py (unaffected by CLAUDE_PROJECT_DIR), so the real
-    hook still reads THIS repo's real docs/audit/audit-scope.yaml -- which
-    has no generated_paths section configured (see audit-scope.yaml's own
-    comment: shipped commented-out). So instead this test patches THIS
-    repo's real audit-scope.yaml temporarily -- copy the original aside,
-    write a version with generated_paths configured, restore it in
-    `finally`, unconditionally.
+    `_AUDIT_SCOPE_ROOT` resolves relative to the HOOK's own on-disk
+    location (three parents up from _common.py -- see that file's
+    comment), not CLAUDE_PROJECT_DIR, so pointing this at a synthetic
+    audit-scope.yaml means running a COPY of the hook (_common.py +
+    no_swallowed_errors.py, no other dependency -- confirmed by reading
+    no_swallowed_errors.py's imports) from inside tmp_path, with a
+    tmp_path-local docs/audit/audit-scope.yaml sitting where that copy's
+    own _AUDIT_SCOPE_ROOT will resolve it to. Nothing outside tmp_path is
+    ever written -- unlike mutating this repo's real audit-scope.yaml in
+    place, which a real concurrent test run (this suite runs hooks in
+    parallel processes) could race against.
     """
-    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    scope_path = os.path.join(repo_root, "docs", "audit", "audit-scope.yaml")
-    original = open(scope_path, encoding="utf-8").read()
-    try:
-        with open(scope_path, "w", encoding="utf-8") as f:
-            f.write(original + '\ngenerated_paths:\n  - "src/gen/"\n')
-
-        content = (
-            "def foo():\n"
-            "    try:\n"
-            "        risky()\n"
-            "    except Exception:\n"
-            "        pass\n"
+    hooks_dir = tmp_path / ".claude" / "hooks"
+    hooks_dir.mkdir(parents=True)
+    real_hooks_dir = os.path.dirname(os.path.abspath(__file__))
+    for name in ("_common.py", "no_swallowed_errors.py"):
+        (hooks_dir / name).write_text(
+            (Path(real_hooks_dir) / name).read_text(encoding="utf-8"), encoding="utf-8"
         )
-        exempted = _run_write(tmp_path, "src/gen/foo.py", content)
-        assert exempted.returncode == 0, exempted.stderr
+    scope_dir = tmp_path / "docs" / "audit"
+    scope_dir.mkdir(parents=True)
+    (scope_dir / "audit-scope.yaml").write_text(
+        'engine_dirs:\n  - "src"\ngenerated_paths:\n  - "src/gen/"\n', encoding="utf-8"
+    )
+    copied_hook = hooks_dir / "no_swallowed_errors.py"
 
-        still_blocked = _run_write(tmp_path, "src/not_gen/foo.py", content)
-        assert still_blocked.returncode == 2, still_blocked.stderr
-        assert "silently swallows an error" in still_blocked.stderr
-    finally:
-        with open(scope_path, "w", encoding="utf-8") as f:
-            f.write(original)
+    content = (
+        "def foo():\n"
+        "    try:\n"
+        "        risky()\n"
+        "    except Exception:\n"
+        "        pass\n"
+    )
+    exempted = _run_write(tmp_path, "src/gen/foo.py", content, hook_path=str(copied_hook))
+    assert exempted.returncode == 0, exempted.stderr
+
+    still_blocked = _run_write(tmp_path, "src/not_gen/foo.py", content, hook_path=str(copied_hook))
+    assert still_blocked.returncode == 2, still_blocked.stderr
+    assert "silently swallows an error" in still_blocked.stderr
 
 
 def test_neighbors_env_var_widens_window(tmp_path):
