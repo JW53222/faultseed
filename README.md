@@ -398,6 +398,8 @@ toolchain requirements weren't met on the machine that wrote it). Read that
 adapter's README for the exact boundary between what was run and what was
 only read from source — this README does not repeat or upgrade that claim.
 
+For AI agents working here (any vendor): [AGENTS.md](AGENTS.md) — the model-agnostic behavioral contract; copy it into your own repo if you want your agents held to it.
+
 ## The first 24 hours
 
 Most of what this pack now enforces was not designed in — it was found,
