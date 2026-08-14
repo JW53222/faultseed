@@ -1,11 +1,35 @@
 #!/usr/bin/env python3
 """integrator_transcript_compactor.py — archive + prune the integrator transcript.
 
-Registered on TWO hook events (see settings.json):
-  - PreCompact      -> ARCHIVE the full pre-compaction transcript (lossless copy).
-  - SessionStart    -> on source in {compact, resume}: PRUNE the live transcript
-                       to [header line] + [last compaction summary .. EOF],
-                       re-rooted.
+NOT A GUARD: this hook never denies a tool call (see _dispatch.py's
+_ADVISORY_HOOKS), and it copies session transcripts under $HOME
+(see ARCHIVE_DIR below) when active. Because of both of those, it is
+excluded from the `python_default` target in docs/hook-manifest.yaml
+(`profiles: {python: false}` on its entry) -- it does NOT ship wired by
+default. See the independent oppositional review, findings L1/L2.
+
+AS SHIPPED, this module implements TWO code paths but only ONE is wired to
+any hook event:
+  - PreCompact      -> ARCHIVE the full pre-compaction transcript (lossless
+                       copy). This is the ONLY event docs/hook-manifest.yaml
+                       declares for this hook (see its `events:` list) --
+                       and, per the exclusion above, even this is not part
+                       of python_default's generated settings.json; a
+                       downstream user must wire it explicitly (e.g. flip
+                       the manifest override to `profiles: {python: true}`,
+                       or add the PreCompact binding to their own
+                       settings.json directly) to get archiving at all.
+  - SessionStart    -> would PRUNE the live transcript (on source in
+                       {compact, resume}) to [header line] + [last
+                       compaction summary .. EOF], re-rooted. `prune()`
+                       below is real and unit-tested, but SessionStart
+                       appears NOWHERE in docs/hook-manifest.yaml or in any
+                       settings.json this repo's generator can produce --
+                       so this path, which is the one that MUTATES the live
+                       transcript, is UNREACHABLE via any wiring this pack
+                       ships. It only runs if a downstream integrator
+                       registers this same module on SessionStart in a
+                       settings.json of their own, outside this pack.
 
 ISOLATION: no-op unless GUARDRAILS_INTEGRATOR_ROLE is set truthy (the
 integrator session). It never touches any other session's transcript.
@@ -45,6 +69,14 @@ import pathlib
 import shutil
 import sys
 
+# UNDISCLOSED-ELSEWHERE $HOME WRITE (independent oppositional review, finding
+# L2): this hook copies the FULL transcript -- prompts, tool calls, tool
+# output -- into the invoking user's home directory whenever it runs
+# (gated by GUARDRAILS_INTEGRATOR_ROLE, see the module docstring's
+# ISOLATION note; inert otherwise). No user-facing doc besides this comment
+# and the module docstring above states that plainly. Anyone wiring this
+# hook should know their session transcripts land on local disk outside the
+# project tree, retained up to ARCHIVE_KEEP snapshots per session_id.
 ARCHIVE_DIR = pathlib.Path.home() / ".claude" / "integrator-transcript-archive"
 ARCHIVE_KEEP = 12
 PRUNE_MIN_LINES = 200
@@ -63,7 +95,12 @@ def archive(transcript_path: str, session_id: str) -> None:
         try:
             old.unlink()
         except OSError:
-            pass
+            pass  # swallow-ok: this only prunes OLD retained snapshots beyond
+            # ARCHIVE_KEEP; the fresh archive() copy this call is protecting
+            # (shutil.copy2 above) has already succeeded by this point, so a failure
+            # here just leaves one extra old snapshot on disk instead of losing data,
+            # and this hook's contract (see module docstring) is "exit 0 always" --
+            # a maintenance hook must never block Claude Code over disk cleanup.
     sys.stderr.write(f"[integrator-compactor] archived -> {dest}\n")
 
 

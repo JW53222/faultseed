@@ -344,12 +344,12 @@ $ python3 -m pytest .claude/hooks/ -q
 Observed just now on this tree:
 
 ```
-130 passed in 2.42s
+144 passed in 2.63s
 ```
 
 This repo is under active concurrent development — the passing count moved
-four times (76 → 86 → 98 → 130) across four consecutive runs I made while
-writing this document, as other in-flight PRs landed new test files and
+five times (76 → 86 → 98 → 130 → 144) across the runs made while
+writing and later revising this document, as other in-flight PRs landed new test files and
 fixed a real bug (see section 5). Treat the number itself as a snapshot, not
 a fact to pin — run the command yourself rather than trusting this line. As
 of this run the suite is fully green (0 failed); if your run shows red,
@@ -434,6 +434,29 @@ together.
 9. If your guard has any such dependency, a test that breaks the
    dependency itself (not the input) and asserts the guard fails closed
    (section 11).
+
+**This list is a bar, not a gate.** Nothing in this repo enforces items 1–9
+above by machine — no CI job rejects a PR for a missing one, and that's a
+deliberate choice, not a gap someone forgot to close. Most of them can't be
+enforced. CI can confirm a test file exists and that it currently passes. It
+cannot confirm that you broke your guard on purpose, watched the test go
+red, and restored it — the one step (section 2) that separates a test that
+proves the guard catches something from a test that merely runs. A CI job
+asserting "mutation check performed" would be a checkbox, and a checkbox
+standing in for an unverifiable claim is precisely the control-shaped object
+this pack exists everywhere else to make legible — see section 9's
+PROVEN-FAILS/NEGATIVE-ONLY split below, or section 5's requirement that an
+escape marker carry an actual reason instead of just being present. So this
+stays a bar a contributor and a reviewer uphold between themselves, and this
+document says so plainly rather than implying enforcement it doesn't have.
+The bar is a bar, not a gate — and pretending otherwise would be the exact
+overclaim this pack refuses everywhere else.
+
+That does not make the nine items optional. There is no bot behind this
+list, which means it depends entirely on the people on either side of a PR
+actually meaning it: the author doing the mutation check for real instead of
+writing the PR description as if they had, and the reviewer asking to see
+it rather than trusting a checked box that isn't there to check.
 
 ## 9. Provenance ledger — classify your own test honestly
 
@@ -605,11 +628,14 @@ path (section 10) has no automated test of its own yet — section 11 names
 this explicitly as the gap a follow-up PR should close, with the exact test
 shape needed. This is the one open item; it's a gap in the pack's test
 coverage, not in this document. `./run_tests.sh`, run from the repo root as
-the final check on this change, exits 0 (`.claude/hooks -- 130 passed`,
-`scripts -- 22 passed`, `examples/ planted-failure checks -- PASS`) — a
-`scripts/` suite failure I observed mid-session (unrelated to this
-document, from another in-flight change to `check_doc_refs.py`) was gone by
-the time of this final run, so there is nothing to report there.
+the final check on this change, exits 0 (all three stages — `.claude/hooks`,
+`scripts`, and `examples/ planted-failure checks` — PASS; the exact
+per-stage counts move too often under concurrent development to quote here
+without going stale, see the hedge above, so re-run it yourself rather than
+trusting a number pinned in this closing report) — a `scripts/` suite
+failure I observed mid-session (unrelated to this document, from another
+in-flight change to `check_doc_refs.py`) was gone by the time of this final
+run, so there is nothing to report there.
 `scripts/check_doc_refs.py --root .` itself exits nonzero right now, but
 only because `CONTRIBUTING.md` is untracked (`git ls-files` confirms) and
 the tool's own `test_untracked_file_is_not_a_valid_resolution_target`

@@ -104,6 +104,29 @@ hooks:
     class: P
     layer: mechanical
     order: 11
+    # NOT a guard -- it never denies a tool call (see _dispatch.py's
+    # _ADVISORY_HOOKS), and it writes session transcripts to $HOME
+    # (ARCHIVE_DIR) when active. A guard pack's DEFAULT install shouldn't
+    # silently wire a non-guard with an undisclosed $HOME write alongside
+    # the nine hooks that ARE the product. Excluded from EVERY shipped target
+    # via this override (class P's own default is "eligible for every
+    # profile" -- see the class-P line in this file's header comment -- so an
+    # explicit per-profile `false` is required to opt a target out of it).
+    #
+    # Both profiles are listed deliberately. The reason this hook doesn't
+    # belong in a default install -- a non-guard that writes to $HOME -- has
+    # nothing to do with whether the target repo is Python or Go. Opting out
+    # only `python` would have left a Go user with exactly the wiring we just
+    # decided was wrong for a Python one.
+    #
+    # Still fully wireable: the hook file and this manifest entry both ship,
+    # so anyone who wants the PreCompact archive/prune behavior can wire it
+    # themselves (either by flipping the relevant profile to `true` here, or
+    # adding the `events:` binding above to their own settings.json
+    # directly). See the independent oppositional review, finding L2.
+    profiles:
+      python: false
+      go: false
     events:
       - {event: PreCompact}
 

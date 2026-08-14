@@ -28,11 +28,11 @@ NEGATIVE-ONLY into "tested":
   detection.
 - **UNTESTED** — no test references the hook.
 
-Snapshot: `python3 -m pytest .claude/hooks/ -q` → `130 passed`. Treat that as
+Snapshot: `python3 -m pytest .claude/hooks/ -q` → `144 passed`. Treat that as
 a snapshot rather than a fact to pin, and run the command yourself. It moved
-four times while this pack was being prepared for release (67 → 113 → 120 →
-130) as untested guards were found and their planted-failure tests written,
-and it will move again the first time someone adds a guard.
+five times while this pack was being prepared for release (67 → 113 → 120 →
+130 → 144) as untested guards were found and their planted-failure tests
+written, and it will move again the first time someone adds a guard.
 
 ## Role + path scope (applies across hooks)
 

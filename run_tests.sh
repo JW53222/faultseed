@@ -141,6 +141,37 @@ else
   echo "found ${#TEST_DIRS[@]} suite(s): ${TEST_DIRS[*]}"
 fi
 
+# Glob discovery above answers "what suites exist right now" -- it has no
+# memory of what used to exist, so a suite that's been moved, renamed, or
+# had its last test file deleted just silently isn't found, and the loop
+# above has no way to tell that apart from "there was never a second
+# suite." (Reproduced by renaming a suite's last test file out of the way:
+# the suite vanishes from TEST_DIRS with no error anywhere above.) This list
+# is that memory, checked as a FLOOR: every name below must still appear in
+# what discovery found. It is deliberately NOT exact-match, so adding a
+# THIRD suite later needs no edit here -- only losing one of these two
+# does, and that edit should be made in the same commit that legitimately
+# removes or renames the suite, with a reason in the commit message.
+EXPECTED_SUITE_DIRS=(".claude/hooks" "scripts")
+
+MISSING_SUITES=()
+for expected in "${EXPECTED_SUITE_DIRS[@]}"; do
+  found=0
+  for d in "${TEST_DIRS[@]}"; do
+    if [[ "$d" == "$expected" ]]; then
+      found=1
+      break
+    fi
+  done
+  if [[ "$found" -eq 0 ]]; then
+    MISSING_SUITES+=("$expected")
+  fi
+done
+
+if [[ "${#MISSING_SUITES[@]}" -gt 0 ]]; then
+  fail_stage "test discovery -- VACUITY: expected suite(s) missing from discovery: ${MISSING_SUITES[*]} -- a suite directory disappeared (renamed, moved, or its last test file deleted/moved out). If this was deliberate, update EXPECTED_SUITE_DIRS in run_tests.sh in the same commit."
+fi
+
 run_pytest_stage() {
   local label="$1" dir="$2"
   echo

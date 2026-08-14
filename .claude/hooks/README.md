@@ -66,9 +66,14 @@ Two independent axes decide whether a hook fires, both in `_common.py`:
   direction, loudly: `AuditScopeLoadError` turns into a block (exit 2), not a
   silent default.
 - **Role (`agent_role()`).** `no_bash_test_mutation.py` bypasses itself
-  entirely when `GUARDRAILS_INTEGRATOR_ROLE` is set to a truthy value (not `""`, `"0"`,
-  `"false"`, `"False"`) — "the integrator owns test edits at merge time."
-  Every other guard in this tree is role-independent.
+  entirely when `GUARDRAILS_INTEGRATOR_ROLE` is set to exactly `"1"` —
+  "the integrator owns test edits at merge time." Every other guard in this
+  tree is role-independent. Note this hook checks the var directly with
+  strict `== "1"`, not via `agent_role()` below, which reads the *same* var
+  loosely (anything not in `("", "0", "false", "False")`) to classify the
+  role. A role of `"integrator"` and an active bypass are two different
+  tests on the same variable — see "Env knobs" below for why they differ on
+  purpose.
 
 `domain_for_path()` in `_common.py` is a reserved seam for a possible future
 domain-scoped hook set. It returns `None` unconditionally today — nothing
@@ -104,16 +109,31 @@ broken and a positive-control unbroken copy in the same test.
 
 ## Env knobs
 
+**Truthiness rule.** This pack uses two different conventions for "is this
+var set," and which one applies is not arbitrary: a variable that **disables
+a control** (a guard bypass) demands the most explicit possible opt-in and is
+checked with strict `== "1"` — nothing else counts, not `"true"`, not
+`"yes"`. A variable that only **enables maintenance behavior** (a role
+classification other code builds on top of, a housekeeping hook's own
+optional side effect) can be permissive and is checked with loose truthiness
+(anything not in `("", "0", "false", "False")`). `no_bash_test_mutation.py`'s
+own bypass check states the reasoning at the site (a stray truthy value
+picked up from a parent shell should not silently widen who can skip
+test-tampering protection). Don't infer one variable's convention from
+another's, or from this same variable's *other* reader — see the
+`GUARDRAILS_INTEGRATOR_ROLE` row below, which has both conventions active on
+the same name in different files, on purpose.
+
 The complete set actually read by a shipped file, by hook:
 
 | Var | Hook | Effect |
 |---|---|---|
 | `GUARDRAILS_STRICT` | `no_swallowed_errors.py` | `1` promotes defect-excusing comments (`# TODO: good enough`) from warn-only to hard-block. Default off. |
 | `GUARDRAILS_SWALLOW_NEIGHBORS` | `no_swallowed_errors.py` | Sibling-function neighborhood-scan window radius. Default `2`. |
-| `GUARDRAILS_INTEGRATOR_ROLE` | `no_bash_test_mutation.py` | Any value not in `("", "0", "false", "False")` bypasses the whole hook. |
-| `SKIP_SUBAGENT_CLOSING_REPORT` | `subagent_closing_report.py` | `1` disables the hook entirely (session-level, not per-invocation). |
+| `GUARDRAILS_INTEGRATOR_ROLE` | `no_bash_test_mutation.py` (bypass); `_common.py`'s `agent_role()` and `integrator_transcript_compactor.py` (role/maintenance) | **Two conventions on one var.** `no_bash_test_mutation.py` checks it directly with strict `== "1"` to decide its bypass. `agent_role()` and the compactor check the same var loosely (anything not in `("", "0", "false", "False")`) to classify the `"integrator"` role / gate the compactor's archive-and-prune. Setting `GUARDRAILS_INTEGRATOR_ROLE=true` selects the integrator role and runs the compactor's maintenance, but does **not** bypass `no_bash_test_mutation.py`. |
+| `SKIP_SUBAGENT_CLOSING_REPORT` | `subagent_closing_report.py` | Strict: exactly `"1"` disables the hook entirely (session-level, not per-invocation). `"true"` does not disable it. |
 | `BLESSED_REPO` | `subagent_closing_report.py` | Optional; only used for an informational `git diff --stat` annotation, not for the block/allow decision. |
-| `SKIP_HOOK_DISPATCH` | `_dispatch.py` | Any value not in `("", "0", "false", "False")` skips dispatch entirely, checked before any hook resolution. |
+| `SKIP_HOOK_DISPATCH` | `_dispatch.py` | Loose (maintenance-style, but note this one skips the whole pack): any value not in `("", "0", "false", "False")` skips dispatch entirely, checked before any hook resolution. |
 | `AUDIT_HARNESS_HOOKS_DIR` | `_dispatch.py` | Overrides where the real hooks directory resolves to (precedence over a co-located default). |
 | `CLAUDE_PROJECT_DIR` | `_common.py` | Project root for telemetry output path and `is_engine_path()`'s scope check. |
 | `CLAUDE_SESSION_ID` | `_common.py` | Tagged onto emitted telemetry events, if set. |

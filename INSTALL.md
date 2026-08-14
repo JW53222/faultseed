@@ -35,9 +35,14 @@ that can block a tool call with exit code 2:
 - `generate_settings_json.py` — builds `.claude/settings.json` from `docs/hook-manifest.yaml`.
 - `check_interpreter_floor.py` — standalone preflight: confirms the interpreter that will run these hooks meets the >=3.10 floor.
 
-Plus a tenth hook that ships but isn't a guard: `integrator_transcript_compactor.py`
-(`PreCompact`, transcript archiving/pruning — informational, never blocks; see
-the exit-code section below for why that distinction matters).
+Plus a tenth hook that ships but is **not wired by default**:
+`integrator_transcript_compactor.py` (`PreCompact`, transcript
+archiving/pruning — informational, never blocks; see the exit-code section
+below for why that distinction matters). It is excluded from the shipped
+`python_default` target deliberately: it is not a guard, and when
+`GUARDRAILS_INTEGRATOR_ROLE` is set it writes transcript copies into
+`~/.claude/`. A guard pack's default install should not wire a non-guard that
+writes to your home directory. Add it to your own target if you want it.
 
 **Config it reads**: `docs/hook-manifest.yaml` (declares which hooks exist and
 their eligibility) and `docs/audit/audit-scope.yaml` (declares your
@@ -147,28 +152,83 @@ wrote .claude/PROVENANCE.json
 
 Real output, this session, from a scratch repo seeded with one file
 (`src/app.py`) and nothing else. The generated `settings.json` wired all 9 <!-- doc-ref-ok: src/app.py is the scratch repo's own file, created by the reader -->
-guards plus the one advisory hook, every command routed through
-`_dispatch.py`:
+guards and nothing else, every command routed through `_dispatch.py`.
+(Generated verbatim; the only substitution is the absolute root, shown
+here as `$CLAUDE_PROJECT_DIR` — that is the variable a real install
+resolves it from.)
 
 ```json
 {
   "hooks": {
     "PreToolUse": [
-      {"matcher": "Edit|Write", "hooks": [{"type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/_dispatch.py\" protect-files.sh"}]},
-      {"matcher": "Edit|Write|MultiEdit", "hooks": [
-        {"type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/_dispatch.py\" no_test_tampering.py"},
-        {"type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/_dispatch.py\" no_swallowed_errors.py"},
-        {"type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/_dispatch.py\" no_type_checking_stub.py"}
-      ]},
-      {"matcher": "Agent", "hooks": [{"type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/_dispatch.py\" agent_sizing_gate.py"}]},
-      {"matcher": "Workflow", "hooks": [{"type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/_dispatch.py\" workflow_agent_sizing_gate.py"}]},
-      {"matcher": "Bash", "hooks": [
-        {"type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/_dispatch.py\" no_bash_test_deletion.py"},
-        {"type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/_dispatch.py\" no_bash_test_mutation.py"}
-      ]}
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/_dispatch.py\" protect-files.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/_dispatch.py\" no_test_tampering.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/_dispatch.py\" no_swallowed_errors.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/_dispatch.py\" no_type_checking_stub.py"
+          }
+        ]
+      },
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/_dispatch.py\" agent_sizing_gate.py"
+          }
+        ]
+      },
+      {
+        "matcher": "Workflow",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/_dispatch.py\" workflow_agent_sizing_gate.py"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/_dispatch.py\" no_bash_test_deletion.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/_dispatch.py\" no_bash_test_mutation.py"
+          }
+        ]
+      }
     ],
-    "SubagentStop": [{"hooks": [{"type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/_dispatch.py\" subagent_closing_report.py"}]}],
-    "PreCompact": [{"hooks": [{"type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/_dispatch.py\" integrator_transcript_compactor.py"}]}]
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/_dispatch.py\" subagent_closing_report.py"
+          }
+        ]
+      }
+    ]
   }
 }
 ```
@@ -356,8 +416,10 @@ non-whitespace character after the colon).
 
 ```
 $ python3 -m pytest .claude/hooks/ -q
-130 passed
 ```
+
+The count moves as tests are added — re-run it yourself rather than trusting
+a pinned number here; `0 failed` is the thing to check.
 
 Or run everything at once — the hook tests, the `scripts/` tests, and the
 `examples/` planted-failure checks — with `./run_tests.sh`. That script fails
@@ -512,7 +574,11 @@ scan, it doesn't disable anything.
 
 Three different truthiness conventions across four variables in one small
 pack. Don't assume one from another; the table above is checked against
-current source, not inferred.
+current source, not inferred. This isn't arbitrary — `.claude/hooks/README.md`'s
+"Env knobs" section states the rule once: a variable that disables a control
+demands strict `== "1"`; a variable that only enables maintenance behavior
+can use loose truthiness. Read it there rather than re-deriving it from this
+table.
 
 ## The run-shape caveat — this one bites silently
 

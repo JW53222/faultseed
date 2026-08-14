@@ -1,4 +1,4 @@
-# Shared helpers for guards-pub examples. Sourced by each example's run.sh
+# Shared helpers for faultseed examples. Sourced by each example's run.sh
 # -- not meant to be run directly (it has no shebang and does nothing on
 # its own).
 #

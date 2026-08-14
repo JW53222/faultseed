@@ -37,6 +37,27 @@
 # (e.g. `backend`, `app`, `lib` -- whatever sits at the repo root). List
 # every one; `engine_dirs` is a flat list of first-path-segment strings, not
 # a glob.
+#
+# A CONCRETE-LOOKING placeholder like "src" has a real cost if you forget to
+# edit it: a repo that genuinely has no `src/` gets SILENT zero coverage
+# from no_swallowed_errors.py and no_type_checking_stub.py -- is_engine_path()
+# just returns False for everything, no error, no warning -- rather than the
+# loud block() an absent/malformed audit-scope.yaml already gets. _common.py
+# also recognizes one literal, unmistakable sentinel value,
+# `UNCONFIGURED_ENGINE_DIRS_SENTINEL = "__SET_ME_TO_YOUR_SOURCE_DIRS__"`
+# (_common.py's `_load_engine_dirs()`): if `engine_dirs` is EXACTLY
+# `["__SET_ME_TO_YOUR_SOURCE_DIRS__"]`, it is treated as "template not yet
+# edited" and blocks loudly, by name, instead of silently checking nothing.
+# This repo's OWN shipped value below is intentionally the concrete "src"
+# placeholder, not that sentinel -- this repo's own test suite
+# (test_no_swallowed_errors.py, test_no_type_checking_stub.py) and examples
+# (examples/03, examples/10) assert against a real `src/`-scoped config read
+# directly from this file, so switching the shipped value to the sentinel
+# would need those updated in the same change (out of scope here; see
+# test_engine_dirs_sentinel.py for the mechanism proven in isolation via its
+# own synthetic config). If you maintain a FORK or downstream template of
+# this pack, shipping the sentinel as the default here is exactly the fix
+# M5 in the independent oppositional review recommends.
 engine_dirs:
   - "src"
 

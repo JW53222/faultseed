@@ -234,7 +234,7 @@ BLOCKED (exit 2) -- the FIXED guard: same .env write, jq broken -- fails CLOSED 
   guard said: BLOCKED: protect-files.sh cannot run -- jq failed to parse the
 
 --- state 3 -- the historical defect, reproduced: same broken jq, PRE-FIX guard code ---
-ALLOWED (exit 0) -- THIS IS THE BUG, NOT A PASS: same broken-jq PATH, same .env write, run against the pre-fix protect-files.sh (commit ecd26c6, before this repo's own jq fail-open fix). Exit 0 -- the write to .env would have gone through. The guard was listed, running, and reporting nothing wrong, while protecting nothing.
+ALLOWED (exit 0) -- THIS IS THE BUG, NOT A PASS: same broken-jq PATH, same .env write, run against the pre-fix protect-files.sh (embedded in the example as a static fixture, from before this repo's own jq fail-open fix). Exit 0 -- the write to .env would have gone through. The guard was listed, running, and reporting nothing wrong, while protecting nothing.
 
 Why this is its own example, not a footnote on 01_protect_files: every
 other example here perturbs the guard's INPUT. This one perturbs its

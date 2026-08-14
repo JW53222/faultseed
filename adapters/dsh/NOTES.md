@@ -309,10 +309,11 @@ A first review round (team-lead) found two defects, both fixed:
 1. `package.json`'s `files` array listed `bin/regenerate-hooks-json.sh`, <!-- doc-ref-ok: naming the file that was wrongly listed and never created; this sentence IS the correction record -->
    which was never created. Fixed to list the two scripts that actually
    exist: `bin/smoke-test.sh`, `bin/codec-mapping-proof.mjs`.
-2. The product name is not chosen yet, but "guards-pub" (this delivery's
-   working directory name, not a product name) had leaked into prose,
-   comments, a cordis row `id`, and a `package.json` description across
-   every shipped file. Every product-name usage across `README.md`,
+2. The working directory name — never a product name — had leaked into
+   prose, comments, a cordis row `id`, and a `package.json` description
+   across every shipped file, at a point when no product name had been
+   chosen. One has since been chosen: `faultseed`. Every product-name usage
+   across `README.md`,
    `cordis.patch.yml`, `package.json`, `hooks.json`, and (for internal
    consistency, since the same defect class applied there too — an addition
    beyond what the review round literally named) `NOTES.md` and both

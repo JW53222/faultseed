@@ -67,6 +67,24 @@ including the exact escape marker and the test that proves it fires, is
   `model` value against a recognized set once the key is present, not just
   that the key exists.)
 
+### How these guards behave when they cannot read their own input
+
+**Unparseable input blocks. Parsed-but-not-applicable allows.**
+
+The two are opposite in kind and look similar from outside. Malformed JSON,
+invalid UTF-8, or unreadable stdin means *the control failed* — it does not
+know what it was asked about — and a control that cannot function must not
+wave the action through. Whereas an event that parses cleanly and simply
+isn't about this guard (`{}`, no `tool_input`, a tool this hook doesn't
+police) is normal operation: most guards see events they correctly ignore
+all day, and blocking those would make the pack unusable.
+
+This is not a general input sanitizer, and should not grow into one. It
+exists only so that "I cannot read my input" stops being reported as
+"nothing to check here." (Enforced: `_common.load_event()` blocks on a
+read/parse failure and names the cause; `protect-files.sh` already failed
+closed on the same condition via `jq`, and the two now agree.)
+
 ## Doctrine — not machine-enforced here
 
 Nothing in this tree checks these. Follow them because they're good practice,

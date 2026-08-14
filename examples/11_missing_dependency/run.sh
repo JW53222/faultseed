@@ -50,15 +50,17 @@ chmod +x "$STUB_DIR/jq"
 BROKEN_JQ_PATH="$STUB_DIR:$PATH"
 
 # --- The pre-fix protect-files.sh, exactly as it read before this pack's
-# jq fail-open was found and fixed. Embedded as a static fixture (not read
-# live from git) so this example stays stable regardless of what this
-# repo's git history looks like later -- captured from and verifiable
-# against commit ecd26c6 ("Import the guard hooks"):
-#   git show ecd26c6:.claude/hooks/protect-files.sh
-# The only change from the current, fixed .claude/hooks/protect-files.sh
-# is the missing jq-availability/exit-status check: this version pipes
-# straight into `jq -r ... // empty` with nothing checking whether jq
-# itself succeeded.
+# jq fail-open was found and fixed. Embedded below as a static fixture --
+# not read live from git, and not cited by commit SHA (a SHA in a doc is a
+# receipt that rots the moment history is rewritten) -- so this example
+# stays stable regardless of what this repo's git history looks like
+# later, and its provenance is verifiable by inspection instead of by
+# trusting a commit reference. The only functional change from the
+# current, fixed .claude/hooks/protect-files.sh is the missing
+# jq-availability/exit-status check below: this version pipes straight
+# into `jq -r ... // empty` with nothing checking whether jq itself
+# succeeded -- read the two side by side (the fixture just below vs.
+# .claude/hooks/protect-files.sh in this repo) and that's the entire delta.
 PRE_FIX_HOOK="$FIXTURE/protect-files.pre-fix.sh"
 cat > "$PRE_FIX_HOOK" <<'PREFIX'
 #!/bin/bash
@@ -114,7 +116,7 @@ expect_block "$HOOKS_DIR/protect-files.sh" "$VIOLATING_EVENT" \
 
 section "state 3 -- the historical defect, reproduced: same broken jq, PRE-FIX guard code"
 expect_allow "$PRE_FIX_HOOK" "$VIOLATING_EVENT" \
-  "THIS IS THE BUG, NOT A PASS: same broken-jq PATH, same .env write, run against the pre-fix protect-files.sh (commit ecd26c6, before this repo's own jq fail-open fix). Exit 0 -- the write to .env would have gone through. The guard was listed, running, and reporting nothing wrong, while protecting nothing." \
+  "THIS IS THE BUG, NOT A PASS: same broken-jq PATH, same .env write, run against the pre-fix protect-files.sh embedded above (before this repo's own jq fail-open fix). Exit 0 -- the write to .env would have gone through. The guard was listed, running, and reporting nothing wrong, while protecting nothing." \
   PATH="$BROKEN_JQ_PATH"
 
 echo

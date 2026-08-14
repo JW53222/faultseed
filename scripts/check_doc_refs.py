@@ -576,7 +576,13 @@ def _py_scan_regions(text):
             if tok.type == tokenize.COMMENT:
                 regions.setdefault(tok.start[0], []).append(tok.string)
     except (tokenize.TokenizeError, IndentationError, SyntaxError, ValueError):
-        pass
+        pass  # swallow-ok: this is a best-effort COMMENT-region extraction pass over
+        # a file that already parsed as valid Python (the caller only reaches here on
+        # source that will also go through ast.parse below); a tokenizer edge case here
+        # just means comment-only doc-refs in that file are missed for this scan, not
+        # that the file goes unchecked -- the AST docstring pass a few lines down is
+        # independent and still runs, and this scanner is advisory tooling
+        # (check_doc_refs.py), not one of the honesty-guardrail hooks it audits.
 
     try:
         tree = ast.parse(text)

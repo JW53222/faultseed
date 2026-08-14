@@ -95,8 +95,8 @@ session:
 
 ```
 $ python3 -m pytest .claude/hooks/test_no_swallowed_errors.py -q
-..........                                                              [100%]
-10 passed in 0.24s
+.............                                                           [100%]
+13 passed in 0.43s
 ```
 
 `test_bare_pass_swallow_blocked` plants the bare-`pass` shape and asserts

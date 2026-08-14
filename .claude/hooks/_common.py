@@ -44,12 +44,41 @@ from pathlib import Path
 
 
 def load_event():
-    """Read and parse the hook JSON from stdin. Never raise on bad input."""
+    """Read and parse the hook JSON from stdin.
+
+    FAILS CLOSED on a genuine read/decode failure: malformed JSON, empty
+    stdin, invalid UTF-8, or stdin being unreadable at all is "this hook
+    cannot read its own input" and BLOCKs (exit 2), naming the cause.
+
+    This used to catch every exception here and silently return {} — every
+    calling hook's own early-return logic then treats an empty event as
+    "nothing to check", i.e. ALLOW. That converted "I cannot read my
+    input" into a silent permit: the exact fail-open shape this pack's own
+    README condemns, and the opposite of what protect-files.sh does on the
+    same condition (it fails closed on unparseable/missing input via jq).
+    See the independent oppositional review, finding M4.
+
+    A SUCCESSFULLY parsed event is NOT this case, even when it is empty or
+    doesn't apply to the calling hook: `{}`, a dict with no `tool_input`, or
+    a tool_name this hook doesn't police all parse fine, so json.load()
+    returns normally and this function returns the event as-is — each
+    hook's own logic decides whether it applies. Only a read/parse failure
+    reaches the except branch below. Do not widen this into a general input
+    sanitizer; it exists solely to stop a stdin-reading failure from being
+    misread as "nothing to do here."
+    """
     global _LAST_EVENT
     try:
         ev = json.load(sys.stdin)
-    except Exception:
-        ev = {}
+    except Exception as exc:
+        block(
+            "BLOCKED: this guardrail hook could not read/parse its own "
+            f"stdin input ({type(exc).__name__}: {exc}). Failing closed "
+            "rather than silently treating unreadable input as nothing to "
+            "check. This is almost always a harness-wiring problem (the "
+            "caller sent malformed or non-UTF-8 JSON, or closed/emptied "
+            "stdin) rather than a bug in this hook."
+        )
     _LAST_EVENT = ev if isinstance(ev, dict) else {}
     return _LAST_EVENT
 
@@ -221,12 +250,29 @@ class AuditScopeLoadError(RuntimeError):
 
 _ENGINE_DIRS_CACHE: tuple | None = None
 
+# Sentinel _load_engine_dirs() treats as "not yet configured" -- MUST match
+# the literal token documented in docs/audit/audit-scope.yaml's engine_dirs
+# comment. Rationale (independent oppositional review, finding M5): a
+# concrete, plausible-looking placeholder like "src" degrades SILENTLY to
+# zero coverage in any repo that doesn't happen to use that top-level
+# layout -- is_engine_path() just returns False for everything, no error,
+# no warning -- while an absent audit-scope.yaml already fails LOUD. That
+# asymmetry means the shipped template is worse than no file at all. A repo
+# whose engine_dirs is still exactly this one-element sentinel list gets
+# the same loud block() an absent/malformed file gets, until a real value
+# replaces it -- restoring "loud until configured" as the actual first-run
+# behavior while still letting audit-scope.yaml ship as a copy-this
+# template (INSTALL.md tells readers to copy it into their own repo).
+UNCONFIGURED_ENGINE_DIRS_SENTINEL = "__SET_ME_TO_YOUR_SOURCE_DIRS__"
+
 
 def _load_engine_dirs():
     """Load, validate, and cache the `engine_dirs` list from
-    docs/audit/audit-scope.yaml. Raises AuditScopeLoadError on any failure;
-    callers (is_engine_path) are responsible for turning that into a loud
-    block() rather than a silent fallback."""
+    docs/audit/audit-scope.yaml. Raises AuditScopeLoadError on any failure
+    -- including the shipped-template case where engine_dirs is still
+    exactly `[UNCONFIGURED_ENGINE_DIRS_SENTINEL]`, i.e. nobody has edited it
+    yet -- callers (is_engine_path) are responsible for turning that into a
+    loud block() rather than a silent fallback."""
     global _ENGINE_DIRS_CACHE
     if _ENGINE_DIRS_CACHE is not None:
         return _ENGINE_DIRS_CACHE
@@ -255,6 +301,14 @@ def _load_engine_dirs():
     if not isinstance(dirs, list) or not all(isinstance(d, str) for d in dirs):
         raise AuditScopeLoadError(
             f"audit-scope.yaml section 'engine_dirs' must be a list of strings, got {dirs!r}"
+        )
+    if list(dirs) == [UNCONFIGURED_ENGINE_DIRS_SENTINEL]:
+        raise AuditScopeLoadError(
+            f"audit-scope.yaml at {scope_path} still has its unconfigured "
+            f"placeholder engine_dirs: [{UNCONFIGURED_ENGINE_DIRS_SENTINEL!r}] "
+            "— edit it to list your actual top-level source directories "
+            '(e.g. ["backend", "app", "lib"]) before engine-quality '
+            "guardrails can check anything."
         )
     _ENGINE_DIRS_CACHE = tuple(dirs)
     return _ENGINE_DIRS_CACHE

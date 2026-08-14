@@ -8,6 +8,16 @@ event on stdin and answers with its exit code — not a linter you run
 afterward, not a prompt you hope the agent reads, but a gate that refuses
 the tool call before it happens.
 
+Nine guards, nine wired hooks — the default install wires those and nothing
+else. One further hook ships but is **not** wired by default:
+`integrator_transcript_compactor.py`, which is not a guard (it never blocks a
+tool call). It archives and prunes transcripts on `PreCompact` and, when
+`GUARDRAILS_INTEGRATOR_ROLE` is set, writes into `~/.claude/`. It was
+excluded from the default target on exactly that reasoning: a guard pack's
+default install should not wire a non-guard that writes to your home
+directory. Opt in by adding it to your own `docs/hook-manifest.yaml` target;
+[INSTALL.md](INSTALL.md) says what it does.
+
 ## The doctrine
 
 > A gate never proven to fail is indistinguishable from a gate that cannot
@@ -70,21 +80,21 @@ exit 2   (same shape against config.envoy.yaml instead of .env: exit 0)
 
 **`no_test_tampering`** — `Edit` on `tests/test_x.py`, `assert a == 1` → `pass` <!-- doc-ref-ok: tests/test_x.py is an illustrative filename, not a file in this repo -->
 ```
-$ python3 .claude/hooks/no_test_tampering.py < event.json
+$ echo '{"tool_name":"Edit","tool_input":{"file_path":"tests/test_x.py","old_string":"    assert a == 1","new_string":"    pass"}}' | python3 .claude/hooks/no_test_tampering.py
 BLOCKED: this edit weakens a test instead of fixing the code under test.
-exit 2   (same edit with `# tampering-ok: <reason>` added: exit 0)
+exit 2   (same edit with `# tampering-ok: <reason>` added instead of a bare `pass`: exit 0)
 ```
 
 **`no_swallowed_errors`** — `Write` to `src/foo.py`, a bare `except Exception: pass`
 ```
-$ python3 .claude/hooks/no_swallowed_errors.py < event.json
+$ echo '{"tool_name":"Write","tool_input":{"file_path":"src/foo.py","content":"def foo():\n    try:\n        risky()\n    except Exception:\n        pass\n"}}' | python3 .claude/hooks/no_swallowed_errors.py
 BLOCKED: this edit hides a problem instead of solving it.
 exit 2   (same body with `# swallow-ok: <reason>` on the pass line: exit 0)
 ```
 
 **`no_type_checking_stub`** — `Write` to `src/foo.py`, `def bar` defined only under `if TYPE_CHECKING:`
 ```
-$ python3 .claude/hooks/no_type_checking_stub.py < event.json
+$ echo '{"tool_name":"Write","tool_input":{"file_path":"src/foo.py","content":"from typing import TYPE_CHECKING\nclass Foo:\n    if TYPE_CHECKING:\n        def bar(self) -> int: ...\n"}}' | python3 .claude/hooks/no_type_checking_stub.py
 BLOCKED: this edit declares a method/function ONLY inside an `if TYPE_CHECKING:` block with no runtime implementation.
 exit 2   (same stub with `# host-provides: <reason>` above the def: exit 0)
 ```
@@ -96,30 +106,35 @@ BLOCKED: this Bash command deletes or moves test files out of the suite.
 exit 2   (rm of a non-test path: exit 0)
 ```
 
-**`no_bash_test_mutation`** — `sed -i` on an existing `test_foo.py`
+**`no_bash_test_mutation`** — `sed -i` on an existing `tests/test_foo.py`. This guard checks
+existence on disk relative to the event's `cwd`, so the fixture has to be real:
 ```
-$ echo '{"tool_name":"Bash","tool_input":{"command":"sed -i s/x/y/ test_foo.py"}}' | python3 .claude/hooks/no_bash_test_mutation.py
+$ F=$(mktemp -d) && mkdir -p "$F/tests" && echo "def test_x(): assert True" > "$F/tests/test_foo.py"
+$ echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sed -i s/x/y/ tests/test_foo.py\"},\"cwd\":\"$F\"}" | python3 .claude/hooks/no_bash_test_mutation.py
 BLOCKED: this Bash command mutates an EXISTING test file in place.
-exit 2   (same sed on a file that does not exist yet: exit 0)
+exit 2   (same sed, but a file that does not exist yet under $F: exit 0)
 ```
 
 **`agent_sizing_gate`** — `Agent(model="opus", prompt="do the thing")`
 ```
-$ python3 .claude/hooks/agent_sizing_gate.py < event.json
-BLOCKED: Agent(model:"opus") is a Opus leaf -- full Opus rate, no fan-out.
+$ echo '{"tool_name":"Agent","tool_input":{"model":"opus","prompt":"do the thing","subagent_type":"general-purpose"}}' | python3 .claude/hooks/agent_sizing_gate.py
+BLOCKED: Agent(model:"opus") is a Opus leaf — full Opus rate, no fan-out.
 exit 2   (same call with `opus-leaf-ok: <reason>` in the prompt: exit 0)
 ```
 
 **`workflow_agent_sizing_gate`** — a `Workflow` script with `agent(p, {subagent_type: "general-purpose"})`, no `model:`
 ```
-$ python3 .claude/hooks/workflow_agent_sizing_gate.py < event.json
+$ echo '{"tool_name":"Workflow","tool_input":{"script":"agent(\"do the thing\", {subagent_type: \"general-purpose\"});"},"cwd":"/tmp"}' | python3 .claude/hooks/workflow_agent_sizing_gate.py
 BLOCKED: this Workflow has agent() call site(s) without an explicit `model`.
 exit 2   (same call with `model: "sonnet"` added: exit 0)
 ```
 
-**`subagent_closing_report`** — a subagent transcript ending "I did the thing, all good." (no marker lines)
+**`subagent_closing_report`** — a subagent transcript ending "I did the thing, all good." (no marker lines).
+Reads its transcript from a file path, not stdin, so this one needs a fixture line first:
 ```
-$ CLAUDE_PROJECT_DIR=. python3 .claude/hooks/subagent_closing_report.py < event.json
+$ T=$(mktemp -d)/transcript.jsonl
+$ echo '{"message":{"role":"assistant","content":[{"type":"text","text":"I did the thing, all good."}]}}' > "$T"
+$ echo "{\"agent_transcript_path\":\"$T\",\"agent_type\":\"sonnet\"}" | CLAUDE_PROJECT_DIR=. python3 .claude/hooks/subagent_closing_report.py
 BLOCKED: your closing report is missing required honesty-guardrail lines.
 exit 2   (identical transcript but agent_type="Explore": exit 0, exemption fires first)
 ```
@@ -212,19 +227,47 @@ deny a tool call is useless broken, so it blocks rather than run silently
 wrong; a control that only informs is allowed to degrade rather than stall
 every tool call in the session.
 
+A third instance of the same trap lived one level lower, in how a guard
+reads its own stdin. `_common.load_event()` used to catch every
+read/parse exception and silently return `{}`; each guard's own
+early-return logic then treats an empty event as "nothing to check" —
+i.e. allow. Garbage bytes, empty stdin, or invalid UTF-8 on a Python
+guard's input used to mean exit 0, the same fail-open shape as the two
+cases above, while `protect-files.sh` failed closed on the identical
+condition via `jq`. Fixed now, and the rule is:
+
+> **Unparseable input blocks. Parsed-but-not-applicable allows.**
+
+The boundary is the entire subtlety. "I cannot read my own input" is a
+failure of the control itself, and must fail closed. "I read the event
+fine and it isn't about me" is normal operation — most guards receive
+events they correctly ignore, and blocking those would be a serious
+over-block that makes the pack unusable. The two look similar from the
+outside and are opposite in kind. Receipt, run this session:
+
+```
+$ printf '\xff\xfe not json garbage' | python3 .claude/hooks/no_test_tampering.py; echo $?
+BLOCKED: this guardrail hook could not read/parse its own stdin input (UnicodeDecodeError: ...). Failing closed ...
+2
+$ printf '\xff\xfe not json garbage' | bash .claude/hooks/protect-files.sh; echo $?
+BLOCKED: protect-files.sh cannot run -- jq failed to parse the tool-call event on stdin. ...
+2
+```
+
 ## Receipts
 
-**Snapshot at commit `1680db3`.** This suite is being actively extended —
-re-run the command yourself rather than trusting the number below to still
-be current by the time you read it.
+**This suite is being actively extended, and the counts below move —
+sometimes within the same session.** There is no fixed commit to pin them
+to; re-run the command yourself rather than trusting the numbers below to
+still be current by the time you read them.
 
 Command run this session, from the repo root:
 
 ```
 $ ./run_tests.sh
 ...
-PASS  test suite: .claude/hooks -- 130 passed
-PASS  test suite: scripts -- 24 passed
+PASS  test suite: .claude/hooks -- 144 passed
+PASS  test suite: scripts -- 71 passed
 PASS  examples/ planted-failure checks
 run_tests.sh: all stages passed.
 ```
