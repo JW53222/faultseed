@@ -474,3 +474,730 @@ def test_neighbors_env_var_widens_window(tmp_path):
     )
     assert widened.returncode == 2
     assert "silently swallows an error" in widened.stderr
+
+
+# --------------------------------------------------------------------------- #
+# Go swallow shapes (module docstring's "GO SWALLOW SHAPES DETECTED"). Filed
+# because a mutation pass proved these ~130 lines of detector logic
+# (GO_DISCARD_ERR, GO_EMPTY_ERR_CHECK, GO_SWALLOWED_RETURN_NIL,
+# GO_IGNORED_SECOND_RETURN and their soft/hard split) had ZERO coverage:
+# disabling the whole Go branch left every other test in this file green.
+#
+# SCOPE NOTE: unlike Python/PowerShell, Go source is NOT gated by
+# `engine_dirs` at all -- confirmed by reading main()'s branch structure:
+# the `is_go` branch only checks `_is_go_generated()`, never
+# `is_engine_path()` (that call lives exclusively in the `else` branch that
+# handles Python/PowerShell). Per the module docstring's own "For Go there
+# is no backend/frontend split" paragraph, "in scope" for Go reduces to "any
+# .go file that isn't generated." Every Go fixture below therefore
+# deliberately uses a path OUTSIDE `src/` (the synthetic engine_dirs this
+# suite's `_copied_hook` pins) to prove that independence isn't accidental --
+# if a future change wired Go through `is_engine_path()` too, these fixtures
+# would start silently allowing (exit 0) instead of blocking, and fail loud.
+# --------------------------------------------------------------------------- #
+
+def test_go_bare_err_discard_blocked(tmp_path):
+    content = (
+        "package pkg\n"
+        "func f() error {\n"
+        "\terr := doThing()\n"
+        "\t_ = err\n"
+        "\treturn nil\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "pkg/foo.go", content)
+    assert r.returncode == 2, r.stderr
+    assert "discards an error value" in r.stderr
+
+
+def test_go_empty_err_check_blocked(tmp_path):
+    content = (
+        "package pkg\n"
+        "func f() error {\n"
+        "\terr := doThing()\n"
+        "\tif err != nil {\n"
+        "\t}\n"
+        "\treturn nil\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "pkg/foo.go", content)
+    assert r.returncode == 2, r.stderr
+    assert "empty `if err != nil { }` body" in r.stderr
+
+
+def test_go_swallowed_return_nil_blocked(tmp_path):
+    content = (
+        "package pkg\n"
+        "func f() error {\n"
+        "\terr := doThing()\n"
+        "\tif err != nil { return nil }\n"
+        "\treturn nil\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "pkg/foo.go", content)
+    assert r.returncode == 2, r.stderr
+    assert "a checked error is discarded by returning nil" in r.stderr
+
+
+def test_go_swallow_ok_marker_clears_hard_hit(tmp_path):
+    # `// swallow-ok: <reason>` on the offending line clears a Go hard hit,
+    # same rationale-required contract as Python's `# swallow-ok:`. Uses the
+    # single-line `if err != nil { }` form (see finding below for why the
+    # bare-discard shape can't be used to pin this): GO_EMPTY_ERR_CHECK's
+    # match itself ends at `}`, so `ln_idx` (computed from the match START)
+    # lands on the SAME line the trailing comment sits on, and
+    # `_line_has_swallow_ok` genuinely inspects that whole line -- verified
+    # directly against the hook that an unrelated garbage comment in this
+    # exact position does NOT clear the hit (only a real `swallow-ok:
+    # <reason>` marker does), so this is pinning the real mechanism, not a
+    # match failure that happens to look like one.
+    content = (
+        "package pkg\n"
+        "func f() error {\n"
+        "\terr := doThing()\n"
+        "\tif err != nil { }  // swallow-ok: deliberate no-op cleanup path\n"
+        "\treturn nil\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "pkg/foo.go", content)
+    assert r.returncode == 0, r.stderr
+
+
+def test_go_bare_swallow_ok_marker_not_cleared(tmp_path):
+    # Same rule as the Python bare-marker test above: no reason after the
+    # colon does NOT count as an escape. Same single-line shape as the test
+    # above so this is a true positive/negative pair over the SAME pattern.
+    content = (
+        "package pkg\n"
+        "func f() error {\n"
+        "\terr := doThing()\n"
+        "\tif err != nil { }  // swallow-ok\n"
+        "\treturn nil\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "pkg/foo.go", content)
+    assert r.returncode == 2, r.stderr
+    assert "empty `if err != nil { }` body" in r.stderr
+
+
+def test_go_bare_discard_err_any_trailing_comment_bypasses_detection_FINDING(tmp_path):
+    """FINDING, not a coverage gap: GO_DISCARD_ERR is
+    `^\\s*_\\s*=\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*$` -- anchored to END OF LINE.
+    The module docstring claims "Go's `//` line-comment syntax is honored
+    the same way: `// swallow-ok: <reason>` on the offending line clears a
+    Go hit, rationale still required" -- implying only a VALID, rationale'd
+    marker should clear a `_ = err` hit.
+
+    Verified directly against the real hook (not this test's assumption):
+    appending ANY trailing text to `_ = err` -- not just a valid
+    `swallow-ok` marker, literally any comment at all, e.g.
+    `_ = err  // just a comment` -- makes GO_DISCARD_ERR fail to match at
+    all, silently bypassing detection with no warning and no rationale
+    check performed. This is a stronger break than "bare marker without
+    reason clears it" (already bad); an outright non-marker comment clears
+    it too, exactly the same as a well-formed one, because the underlying
+    regex never distinguishes them -- it simply stops matching once
+    anything follows the identifier on the line.
+
+    This test asserts the DOCUMENTED behavior (an unmarked, non-`swallow-ok`
+    comment must not silence a real error discard) and is EXPECTED TO FAIL
+    against the current guard. Per this task's instructions: do not weaken
+    this assertion to match the buggy behavior -- report it.
+    """
+    content = (
+        "package pkg\n"
+        "func f() error {\n"
+        "\terr := doThing()\n"
+        "\t_ = err  // just a comment, not a swallow-ok marker at all\n"
+        "\treturn nil\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "pkg/foo.go", content)
+    assert r.returncode == 2, (
+        "FINDING: GO_DISCARD_ERR's end-of-line anchor lets ANY trailing "
+        "comment (not just a valid swallow-ok marker) silently bypass "
+        "detection of a bare `_ = err` discard. Actual result: "
+        f"returncode={r.returncode!r}, stderr={r.stderr!r}"
+    )
+
+
+def test_go_ignored_second_return_is_soft_warn_not_block(tmp_path):
+    # The documented soft/hard split: an ignored second return (`x, _ :=
+    # call()`) cannot be distinguished from Go's legitimate `(T, bool)`
+    # "found" idiom without the callee's real signature, so it is WARN-ONLY
+    # -- exit 0, but a warning still reaches stderr. This is the exact
+    # pairing the task calls out as nothing currently pins: a hard shape
+    # must exit 2 (tests above) and this soft shape must exit 0 while still
+    # warning.
+    content = (
+        "package pkg\n"
+        "func f() {\n"
+        "\tx, _ := call()\n"
+        "\t_ = x\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "pkg/foo.go", content)
+    assert r.returncode == 0, r.stderr
+    assert "WARNING (allowed):" in r.stderr
+    assert "discards a second return value" in r.stderr
+
+
+def test_go_defer_close_not_flagged(tmp_path):
+    # Legitimate shape from the module docstring: a bare call statement, no
+    # return value ever bound to anything -- no pattern here can match it.
+    content = (
+        "package pkg\n"
+        "func f() {\n"
+        "\tdefer fh.Close()\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "pkg/foo.go", content)
+    assert r.returncode == 0, r.stderr
+    assert "WARNING" not in r.stderr
+
+
+def test_go_discard_call_result_not_bare_identifier_not_flagged(tmp_path):
+    # `_ = f.Close()` discards a CALL's result, not a bare identifier -- the
+    # `_ = <name>` discard pattern requires a bare identifier with nothing
+    # else on the line, so this must NOT be flagged (module docstring's
+    # "LEGITIMATE GO SHAPES THAT MUST STAY ALLOWED").
+    content = (
+        "package pkg\n"
+        "func f() {\n"
+        "\t_ = fh.Close()\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "pkg/foo.go", content)
+    assert r.returncode == 0, r.stderr
+    assert "WARNING" not in r.stderr
+
+
+def test_go_discard_non_error_identifier_not_flagged(tmp_path):
+    # GO_DISCARD_ERR is scoped to identifiers whose name contains "err"
+    # (case-insensitive) -- discarding an unrelated bare local must not fire.
+    content = (
+        "package pkg\n"
+        "func f() {\n"
+        "\tcount := computeCount()\n"
+        "\t_ = count\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "pkg/foo.go", content)
+    assert r.returncode == 0, r.stderr
+
+
+def test_go_generated_bindata_suffix_exempt(tmp_path):
+    # `_bindata.go` suffix -- build output, never hand-authored source.
+    content = (
+        "package pkg\n"
+        "func f() error {\n"
+        "\terr := doThing()\n"
+        "\t_ = err\n"
+        "\treturn nil\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "pkg/foo_bindata.go", content)
+    assert r.returncode == 0, r.stderr
+
+
+def test_go_generated_marker_comment_exempt(tmp_path):
+    # The Go-ecosystem-standard "Code generated ... DO NOT EDIT." marker.
+    content = (
+        "// Code generated by protoc-gen-go. DO NOT EDIT.\n"
+        "package pkg\n"
+        "func f() error {\n"
+        "\terr := doThing()\n"
+        "\t_ = err\n"
+        "\treturn nil\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "pkg/foo.pb.go", content)
+    assert r.returncode == 0, r.stderr
+
+
+def test_go_test_file_exempt(tmp_path):
+    # is_test_file() recognises `_test.go` -- policed the same as Python
+    # test files (exempt regardless of engine scope).
+    content = (
+        "package pkg\n"
+        "func f() error {\n"
+        "\terr := doThing()\n"
+        "\t_ = err\n"
+        "\treturn nil\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "pkg/foo_test.go", content)
+    assert r.returncode == 0, r.stderr
+
+
+# --------------------------------------------------------------------------- #
+# Regression pins for the cross-brace comment fix: GO_EMPTY_ERR_CHECK and
+# GO_SWALLOWED_RETURN_NIL were BOTH anchored so a comment sitting between the
+# braces stopped the pattern matching at all -- which meant the swallow-ok
+# marker check (_match_has_swallow_ok) was never reached, so ANY comment
+# (marker or not, reasoned or not) silently cleared the hit. Confirmed by
+# probe: rc=0 (allowed) before the fix, rc=2 (blocked) after, for content
+# identical to `test_go_empty_err_check_blocked` / `test_go_swallowed_
+# return_nil_blocked` above but with a plain non-marker comment inserted
+# between the braces.
+#
+# Each pattern gets the same four-shape grid used for GO_DISCARD_ERR/
+# PS_EMPTY_CATCH's earlier FINDING pins, now that the bug they found is
+# fixed:
+#   1. non-marker comment between the braces -> still BLOCKED (the actual
+#      regression -- this is the shape that used to slip through silently)
+#   2. valid `swallow-ok: <reason>` marker on its OWN LINE between the
+#      braces -> ALLOWED (the marker-window generalization that shipped
+#      alongside the fix: from "the line the match starts on" to "any line
+#      the match spans")
+#   3. bare `swallow-ok` (no reason) in that same between-the-braces
+#      position -> still BLOCKED (this exact position was UNREACHABLE
+#      before the fix, since detection never fired there at all -- most
+#      worth pinning)
+#   4. no comment at all -> still BLOCKED (already covered by the existing
+#      `_blocked` tests above; not repeated here)
+#
+# Case 1 also does double duty as the guard against the trap named in the
+# task: a "marker clears it" test can pass for the wrong reason (detection
+# never fired), not because marker recognition worked. Comparing case 1
+# (blocked) against case 2 (allowed) over the IDENTICAL brace position
+# proves the marker path -- not a match failure -- is what flips the result.
+# --------------------------------------------------------------------------- #
+
+def test_go_empty_err_check_non_marker_comment_still_blocked(tmp_path):
+    content = (
+        "package pkg\n"
+        "func f() error {\n"
+        "\terr := doThing()\n"
+        "\tif err != nil {\n"
+        "\t\t// just a comment, not a swallow-ok marker at all\n"
+        "\t}\n"
+        "\treturn nil\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "pkg/foo.go", content)
+    assert r.returncode == 2, r.stderr
+    assert "empty `if err != nil { }` body" in r.stderr
+
+
+def test_go_empty_err_check_marker_on_own_line_between_braces_allowed(tmp_path):
+    content = (
+        "package pkg\n"
+        "func f() error {\n"
+        "\terr := doThing()\n"
+        "\tif err != nil {\n"
+        "\t\t// swallow-ok: deliberate no-op cleanup path\n"
+        "\t}\n"
+        "\treturn nil\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "pkg/foo.go", content)
+    assert r.returncode == 0, r.stderr
+
+
+def test_go_empty_err_check_bare_marker_on_own_line_between_braces_not_cleared(tmp_path):
+    content = (
+        "package pkg\n"
+        "func f() error {\n"
+        "\terr := doThing()\n"
+        "\tif err != nil {\n"
+        "\t\t// swallow-ok\n"
+        "\t}\n"
+        "\treturn nil\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "pkg/foo.go", content)
+    assert r.returncode == 2, r.stderr
+    assert "empty `if err != nil { }` body" in r.stderr
+
+
+def test_go_swallowed_return_nil_non_marker_comment_still_blocked(tmp_path):
+    content = (
+        "package pkg\n"
+        "func f() error {\n"
+        "\terr := doThing()\n"
+        "\tif err != nil {\n"
+        "\t\t// just a comment, not a swallow-ok marker at all\n"
+        "\t\treturn nil\n"
+        "\t}\n"
+        "\treturn nil\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "pkg/foo.go", content)
+    assert r.returncode == 2, r.stderr
+    assert "a checked error is discarded by returning nil" in r.stderr
+
+
+def test_go_swallowed_return_nil_marker_on_own_line_between_braces_allowed(tmp_path):
+    content = (
+        "package pkg\n"
+        "func f() error {\n"
+        "\terr := doThing()\n"
+        "\tif err != nil {\n"
+        "\t\t// swallow-ok: deliberate degrade-to-default\n"
+        "\t\treturn nil\n"
+        "\t}\n"
+        "\treturn nil\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "pkg/foo.go", content)
+    assert r.returncode == 0, r.stderr
+
+
+def test_go_swallowed_return_nil_bare_marker_on_own_line_between_braces_not_cleared(tmp_path):
+    content = (
+        "package pkg\n"
+        "func f() error {\n"
+        "\terr := doThing()\n"
+        "\tif err != nil {\n"
+        "\t\t// swallow-ok\n"
+        "\t\treturn nil\n"
+        "\t}\n"
+        "\treturn nil\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "pkg/foo.go", content)
+    assert r.returncode == 2, r.stderr
+    assert "a checked error is discarded by returning nil" in r.stderr
+
+
+# --------------------------------------------------------------------------- #
+# PowerShell swallow shapes (module docstring's "PowerShell swallows" note).
+# UNLIKE Go, PowerShell IS gated by `engine_dirs` (the `else` branch of
+# main() -- is_ps is not is_go, so it goes through `is_engine_path()` the
+# same as Python). Every in-scope fixture below therefore uses `src/...`
+# (this suite's synthetic engine_dirs) and the scope-both-directions test
+# pins that an identical violation is allowed outside it, mirroring
+# `test_engine_scope_gate_both_directions` above but for the PS branch
+# specifically (that existing test only exercises the Python AST tier).
+# --------------------------------------------------------------------------- #
+
+def test_ps_empty_catch_blocked(tmp_path):
+    content = (
+        "try {\n"
+        "    Do-Thing\n"
+        "} catch {\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "src/foo.ps1", content)
+    assert r.returncode == 2, r.stderr
+    assert "empty/no-op `catch { }`" in r.stderr
+
+
+def test_ps_error_action_silently_continue_blocked(tmp_path):
+    content = "Do-Thing -ErrorAction SilentlyContinue\n"
+    r = _run_write(tmp_path, "src/foo.ps1", content)
+    assert r.returncode == 2, r.stderr
+    assert "-ErrorAction SilentlyContinue/Ignore" in r.stderr
+
+
+def test_ps_error_action_ignore_blocked(tmp_path):
+    content = "Do-Thing -ErrorAction Ignore\n"
+    r = _run_write(tmp_path, "src/foo.ps1", content)
+    assert r.returncode == 2, r.stderr
+    assert "-ErrorAction SilentlyContinue/Ignore" in r.stderr
+
+
+def test_ps_global_error_action_preference_blocked(tmp_path):
+    content = "$ErrorActionPreference = 'SilentlyContinue'\n"
+    r = _run_write(tmp_path, "src/foo.ps1", content)
+    assert r.returncode == 2, r.stderr
+    assert "global `$ErrorActionPreference" in r.stderr
+
+
+def test_ps_swallow_ok_marker_clears_hard_hit(tmp_path):
+    # Single-line `catch { }` form: PS_EMPTY_CATCH's match ends at the
+    # closing brace, so `_line_has_swallow_ok` genuinely inspects the same
+    # line the trailing comment sits on. (The two-line `catch {\n}` form
+    # with a comment placed BETWEEN the braces is a separate, broken case --
+    # see the FINDING test below; it is NOT used here because it would pass
+    # for the wrong reason: the pattern fails to match at all once anything
+    # non-whitespace sits between the braces, regardless of whether it is a
+    # real marker.)
+    content = (
+        "try {\n"
+        "    Do-Thing\n"
+        "} catch { }  # swallow-ok: cleanup path, safe to ignore\n"
+    )
+    r = _run_write(tmp_path, "src/foo.ps1", content)
+    assert r.returncode == 0, r.stderr
+
+
+def test_ps_bare_swallow_ok_marker_not_cleared(tmp_path):
+    # Same single-line shape as the test above, so this is a true
+    # positive/negative pair over the SAME pattern.
+    content = (
+        "try {\n"
+        "    Do-Thing\n"
+        "} catch { }  # swallow-ok\n"
+    )
+    r = _run_write(tmp_path, "src/foo.ps1", content)
+    assert r.returncode == 2, r.stderr
+    assert "empty/no-op `catch { }`" in r.stderr
+
+
+def test_ps_empty_catch_multiline_any_comment_between_braces_bypasses_detection_FINDING(tmp_path):
+    """FINDING, not a coverage gap: PS_EMPTY_CATCH is
+    `catch\\s*(\\[[^\\]]*\\]\\s*)?\\{\\s*\\}` -- it requires ONLY whitespace
+    between the braces. PS_NULL_CATCH has the same shape. Neither the module
+    docstring nor the PATTERNS.md registry document a same-line-only
+    restriction for the PowerShell escape marker; the handler-aware marker
+    convention documented for Python (`# swallow-ok:` on the `except` line,
+    the body line, OR a comment line between them) suggests a comment placed
+    between an empty catch's two braces should be a natural, honored
+    position too.
+
+    Verified directly against the real hook (not this test's assumption):
+    when `catch {` and the closing `}` are on SEPARATE lines (the natural
+    multi-statement style used throughout this file's OWN existing fixtures,
+    e.g. `test_ps_empty_catch_blocked` above), inserting ANY comment between
+    them -- not just a valid swallow-ok marker, a plain unrelated comment --
+    makes the regex fail to match at all, silently bypassing detection with
+    no warning. This is the same root-cause class as the Go
+    GO_DISCARD_ERR finding above: a delimiter-adjacency pattern that
+    requires pure whitespace breaks the instant ANY text (marked or not) is
+    inserted where a human would naturally put an audit comment.
+
+    This test asserts the DOCUMENTED intent (an unmarked, non-`swallow-ok`
+    comment between the braces must not silence a real empty-catch swallow)
+    and is EXPECTED TO FAIL against the current guard. Per this task's
+    instructions: do not weaken this assertion to match the buggy behavior
+    -- report it.
+    """
+    content = (
+        "try {\n"
+        "    Do-Thing\n"
+        "} catch {  # just a comment, not a swallow-ok marker at all\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "src/foo.ps1", content)
+    assert r.returncode == 2, (
+        "FINDING: PS_EMPTY_CATCH/PS_NULL_CATCH's `\\{\\s*\\}` pattern lets "
+        "ANY comment placed between a multi-line catch's braces (not just a "
+        "valid swallow-ok marker) silently bypass detection of an empty "
+        f"catch. Actual result: returncode={r.returncode!r}, "
+        f"stderr={r.stderr!r}"
+    )
+
+
+def test_ps_engine_scope_gate_both_directions(tmp_path):
+    # PowerShell goes through `is_engine_path()` exactly like Python (unlike
+    # Go, which is scope-independent -- see the Go section above). The
+    # identical violating content is blocked under the synthetic
+    # engine_dirs=["src"] and allowed one directory over.
+    content = (
+        "try {\n"
+        "    Do-Thing\n"
+        "} catch {\n"
+        "}\n"
+    )
+    in_scope = _run_write(tmp_path, "src/foo.ps1", content)
+    assert in_scope.returncode == 2, in_scope.stderr
+
+    out_of_scope = _run_write(tmp_path, "other/foo.ps1", content)
+    assert out_of_scope.returncode == 0, out_of_scope.stderr
+
+
+def test_ps_test_file_exempt(tmp_path):
+    # is_test_file() recognises Pester's `.tests.ps1` suffix.
+    content = (
+        "try {\n"
+        "    Do-Thing\n"
+        "} catch {\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "src/foo.tests.ps1", content)
+    assert r.returncode == 0, r.stderr
+
+
+# --------------------------------------------------------------------------- #
+# Regression pins for PS_NULL_CATCH -- the third pattern hit by the same
+# cross-brace-comment anchoring bug as GO_EMPTY_ERR_CHECK/GO_SWALLOWED_
+# RETURN_NIL above (and, before the fix, PS_EMPTY_CATCH -- see that
+# pattern's own FINDING test further up, now presumably fixed the same way).
+# `catch { $null|continue|return }` written across multiple lines, with a
+# comment sitting between the `catch {` and the closing `}`, used to fail to
+# match at all once ANY comment (marker or not) was present -- silently
+# bypassing detection with no warning, exactly the shape the task calls out
+# as the one most likely to survive if under-tested: "a test for one of
+# three [variants] is the shape that let this bug survive in the first
+# place." All three variants (`$null`, `continue`, `return`) get the full
+# four-shape grid: non-marker comment still blocks (the regression itself),
+# a correctly-reasoned marker on its own line between the braces clears it
+# (the marker-window generalization that shipped with the fix), a bare
+# marker in that same position does NOT clear it (unreachable before the
+# fix, most worth pinning), and the plain no-comment baseline still blocks
+# (proves the block isn't coming from some other path).
+#
+# Content is deliberately NOT built with PS_EMPTY_CATCH's shape too: the
+# body always contains `$null`/`continue`/`return`, real (non-whitespace,
+# non-comment) content between the braces, so PS_EMPTY_CATCH's own
+# "` \{\s*\}`-only" pattern does not also match -- confirmed by probe: the
+# stderr for every BLOCKED case below carries ONLY the PS_NULL_CATCH
+# wording ("whose body only nulls/continues/returns"), never the
+# PS_EMPTY_CATCH wording ("empty/no-op `catch { }`"), so these tests are
+# pinned to the pattern the task named, not its sibling.
+# --------------------------------------------------------------------------- #
+
+def test_ps_null_catch_dollar_null_baseline_blocked(tmp_path):
+    content = (
+        "try {\n"
+        "    Do-Thing\n"
+        "} catch {\n"
+        "    $null\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "src/foo.ps1", content)
+    assert r.returncode == 2, r.stderr
+    assert "whose body only nulls/continues/returns" in r.stderr
+    assert "empty/no-op `catch { }`" not in r.stderr
+
+
+def test_ps_null_catch_dollar_null_non_marker_comment_still_blocked(tmp_path):
+    content = (
+        "try {\n"
+        "    Do-Thing\n"
+        "} catch {\n"
+        "    # just a comment, not a swallow-ok marker at all\n"
+        "    $null\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "src/foo.ps1", content)
+    assert r.returncode == 2, r.stderr
+    assert "whose body only nulls/continues/returns" in r.stderr
+    assert "empty/no-op `catch { }`" not in r.stderr
+
+
+def test_ps_null_catch_dollar_null_marker_on_own_line_allowed(tmp_path):
+    content = (
+        "try {\n"
+        "    Do-Thing\n"
+        "} catch {\n"
+        "    # swallow-ok: deliberate no-op, error is expected here\n"
+        "    $null\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "src/foo.ps1", content)
+    assert r.returncode == 0, r.stderr
+
+
+def test_ps_null_catch_dollar_null_bare_marker_on_own_line_not_cleared(tmp_path):
+    content = (
+        "try {\n"
+        "    Do-Thing\n"
+        "} catch {\n"
+        "    # swallow-ok\n"
+        "    $null\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "src/foo.ps1", content)
+    assert r.returncode == 2, r.stderr
+    assert "whose body only nulls/continues/returns" in r.stderr
+
+
+def test_ps_null_catch_continue_baseline_blocked(tmp_path):
+    content = (
+        "try {\n"
+        "    Do-Thing\n"
+        "} catch {\n"
+        "    continue\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "src/foo.ps1", content)
+    assert r.returncode == 2, r.stderr
+    assert "whose body only nulls/continues/returns" in r.stderr
+
+
+def test_ps_null_catch_continue_non_marker_comment_still_blocked(tmp_path):
+    content = (
+        "try {\n"
+        "    Do-Thing\n"
+        "} catch {\n"
+        "    # just a comment, not a swallow-ok marker at all\n"
+        "    continue\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "src/foo.ps1", content)
+    assert r.returncode == 2, r.stderr
+    assert "whose body only nulls/continues/returns" in r.stderr
+
+
+def test_ps_null_catch_continue_marker_on_own_line_allowed(tmp_path):
+    content = (
+        "try {\n"
+        "    Do-Thing\n"
+        "} catch {\n"
+        "    # swallow-ok: deliberate skip, handled by the outer loop\n"
+        "    continue\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "src/foo.ps1", content)
+    assert r.returncode == 0, r.stderr
+
+
+def test_ps_null_catch_continue_bare_marker_on_own_line_not_cleared(tmp_path):
+    content = (
+        "try {\n"
+        "    Do-Thing\n"
+        "} catch {\n"
+        "    # swallow-ok\n"
+        "    continue\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "src/foo.ps1", content)
+    assert r.returncode == 2, r.stderr
+    assert "whose body only nulls/continues/returns" in r.stderr
+
+
+def test_ps_null_catch_return_baseline_blocked(tmp_path):
+    content = (
+        "try {\n"
+        "    Do-Thing\n"
+        "} catch {\n"
+        "    return\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "src/foo.ps1", content)
+    assert r.returncode == 2, r.stderr
+    assert "whose body only nulls/continues/returns" in r.stderr
+
+
+def test_ps_null_catch_return_non_marker_comment_still_blocked(tmp_path):
+    content = (
+        "try {\n"
+        "    Do-Thing\n"
+        "} catch {\n"
+        "    # just a comment, not a swallow-ok marker at all\n"
+        "    return\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "src/foo.ps1", content)
+    assert r.returncode == 2, r.stderr
+    assert "whose body only nulls/continues/returns" in r.stderr
+
+
+def test_ps_null_catch_return_marker_on_own_line_allowed(tmp_path):
+    content = (
+        "try {\n"
+        "    Do-Thing\n"
+        "} catch {\n"
+        "    # swallow-ok: deliberate early-return, caller retries\n"
+        "    return\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "src/foo.ps1", content)
+    assert r.returncode == 0, r.stderr
+
+
+def test_ps_null_catch_return_bare_marker_on_own_line_not_cleared(tmp_path):
+    content = (
+        "try {\n"
+        "    Do-Thing\n"
+        "} catch {\n"
+        "    # swallow-ok\n"
+        "    return\n"
+        "}\n"
+    )
+    r = _run_write(tmp_path, "src/foo.ps1", content)
+    assert r.returncode == 2, r.stderr
+    assert "whose body only nulls/continues/returns" in r.stderr

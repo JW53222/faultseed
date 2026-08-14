@@ -173,3 +173,115 @@ def test_bare_escape_without_reason_does_not_clear_block():
         script='agent("do the thing", {subagent_type: "gp"}); // workflow-model-ok'
     )
     assert rc == 2
+
+
+# =============================================================================
+# GAP: `model:` present but not a static string literal -- the "nonliteral"
+# branch (_find_agent_calls's third status, alongside "missing"/"invalid").
+# The module docstring documents this as a deliberate design decision (see
+# "Limitations": a variable, member expression, function call, ternary, or
+# `${}`-interpolated template can't be checked against VALID, so it is
+# "treated as unverifiable, not trusted" and BLOCKED, same as a missing
+# model -- not silently allowed the way a merely-unrecognized value's
+# neighbor might suggest). Before these tests nothing exercised this branch
+# at all: a mutation pass confirmed the whole `status, model_value =
+# "nonliteral", None` assignment (both the plain-non-literal case and the
+# `"${" in raw` template-interpolation case) could be deleted -- collapsing
+# every nonliteral into whatever the `lit_match is None` fallthrough left
+# `status` as -- with the full 11/11 suite and the example staying green.
+#
+# The three tests below assert on the DISTINGUISHING MESSAGE text, not just
+# exit code, because "missing", "invalid", and "nonliteral" are three
+# different verdicts that all block (rc 2) -- asserting only rc could not
+# tell a mutant that merges "nonliteral" into "invalid" (or vice versa) from
+# correct behavior.
+# =============================================================================
+
+def test_recognized_literal_model_allowed():
+    """Boundary case 1 of 3: a plain quoted string literal in the
+    recognised tier set is the normal, fully-verifiable case -- allowed."""
+    rc, _ = _run(script='agent("do the thing", {model: "sonnet"});')
+    assert rc == 0
+
+
+def test_unrecognized_literal_model_blocked_as_invalid_not_nonliteral():
+    """Boundary case 2 of 3: `model:` IS a static string literal, just not
+    one of the recognised tiers -- this is the "invalid" verdict, distinct
+    from "nonliteral" (which is reserved for values that cannot be resolved
+    statically at all). Assert on the "invalid" wording specifically so a
+    mutant that mislabels this as "nonliteral" (or vice versa) goes red."""
+    rc, err = _run(script='agent("do the thing", {model: "claude-3"});')
+    assert rc == 2
+    assert "is not one of" in err
+    assert "cannot verify statically" not in err
+
+
+def test_variable_model_value_blocked_as_nonliteral_unverifiable():
+    """Boundary case 3 of 3: `model:` is a bare identifier (a variable) --
+    not a string literal at all, so its value cannot be resolved by static
+    parsing. Per the module docstring this is deliberately BLOCKED as
+    unverifiable rather than trusted. Assert the distinguishing
+    "cannot verify statically" message (not just rc 2) so this cannot be
+    confused with "missing" or "invalid" in the block output."""
+    rc, err = _run(script="var m = 'sonnet'; agent(\"do the thing\", {model: m});")
+    assert rc == 2
+    assert "cannot verify statically" in err
+    assert "line 1" in err
+
+
+def test_member_expression_model_value_blocked_as_nonliteral():
+    """Same "nonliteral" verdict for a member-expression value (e.g. reading
+    off a config object) -- another shape from the docstring's list
+    (variable, member expression, function call, ternary, template)."""
+    rc, err = _run(
+        script='agent("do the thing", {model: config.defaultModel});'
+    )
+    assert rc == 2
+    assert "cannot verify statically" in err
+
+
+def test_function_call_model_value_blocked_as_nonliteral():
+    """Same "nonliteral" verdict for a function-call value."""
+    rc, err = _run(
+        script='agent("do the thing", {model: pickModel()});'
+    )
+    assert rc == 2
+    assert "cannot verify statically" in err
+
+
+def test_template_literal_interpolation_model_value_blocked_as_nonliteral():
+    """A `${}`-interpolated template literal is syntactically a string
+    literal (matches `_MODEL_LITERAL_RE`'s backtick alternative) but its
+    VALUE can't be resolved without evaluating JS -- the module docstring
+    calls this out as needing "the same treatment as 'nonliteral'"
+    (`_find_agent_calls`'s `"${" in raw` branch). This is the one nonliteral
+    sub-case that passes the literal-syntax check first before being
+    reclassified, so it is worth its own test distinct from the bare-
+    variable case above."""
+    rc, err = _run(
+        script='agent("do the thing", {model: `${tier}`});'
+    )
+    assert rc == 2
+    assert "cannot verify statically" in err
+
+
+def test_plain_template_literal_without_interpolation_is_a_normal_literal():
+    """Near-miss for the template-interpolation case directly above: a
+    backtick string with NO `${}` inside it is a fully static literal (its
+    raw text is known), so it is checked against VALID exactly like a
+    single/double-quoted string -- "opus" is a recognised tier, so this
+    allows, distinguishing "nonliteral because backtick" (wrong) from
+    "nonliteral only when interpolated" (the documented, correct rule)."""
+    rc, _ = _run(script='agent("do the thing", {model: `opus`});')
+    assert rc == 0
+
+
+def test_nonliteral_with_reasoned_escape_allowed():
+    """The reasoned escape clears a nonliteral verdict the same way it
+    clears "missing" -- the escape check happens after status
+    classification and overrides any non-"ok" status uniformly."""
+    rc, _ = _run(
+        script="var m = pickModel(); agent(\"do the thing\", {model: m}); "
+        "// workflow-model-ok: model resolved at runtime from a vetted allowlist"
+    )
+    assert rc == 0

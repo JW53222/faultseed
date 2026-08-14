@@ -112,11 +112,22 @@ earlier except-line-only rule could not see — the tolerance exists so a
 correct annotation in any of the three natural positions counts.)
 
 Go's `//` line-comment syntax is honored the same way: `// swallow-ok:
-<reason>` on the offending line clears a Go hit, rationale still required.
+<reason>` on any line spanned by the hit (the `if`/discard line, or a comment
+line between the braces for the multi-line empty-check and swallowed-return-
+nil shapes) clears a Go hit, rationale still required. A GO_DISCARD_ERR shape
+(`_ = err`) is single-line, so its marker must trail on that same line.
 
 PowerShell swallows (catch {}, -ErrorAction SilentlyContinue, global
-$ErrorActionPreference) are detected on the added text (no AST), and also honor
-a `# swallow-ok: <reason>` marker on the offending line.
+$ErrorActionPreference) are detected on the added text (no AST), and also
+honor a `# swallow-ok: <reason>` marker on any line spanned by the hit --
+including a comment line sitting between an empty catch's two braces, not
+just the line the `catch` keyword is on. Detection SHAPE and marker
+EXEMPTION are deliberately separate concerns here: the empty-catch/empty-
+err-check/swallowed-return-nil patterns treat whitespace AND comments as
+equally "no real code between the braces" (a bare whitespace-only pattern
+between delimiters used to mean any comment -- marked or not -- broke the
+match outright and silently bypassed detection), while
+`_match_has_swallow_ok` alone decides whether a hit is excused.
 
 EXCUSE COMMENTS (`# TODO: good enough`, `# known issue`) are WARN-ONLY by
 default. GUARDRAILS_STRICT=1 promotes them to a hard block.
@@ -154,9 +165,23 @@ NEIGHBORS = int(os.environ.get("GUARDRAILS_SWALLOW_NEIGHBORS", "2"))
 SWALLOW_OK = re.compile(r"(?:#|<#|//)\s*swallow-ok\s*:\s*(\S.*?)\s*(?:#>)?\s*$")
 
 # --- PowerShell swallow patterns (regex over added text) ---
-PS_EMPTY_CATCH = re.compile(r"catch\s*(\[[^\]]*\]\s*)?\{\s*\}", re.IGNORECASE)
+# Between the braces we allow whitespace AND comments (`# ...` to end of
+# line, `<# ... #>` block) -- not just whitespace. A bare `\s*` here was the
+# bug: a comment is not whitespace, so `catch {\n  # some comment\n}` (a
+# genuinely empty handler with a human annotation) failed to match at all,
+# which means ANY comment -- not just an unmarked one, a valid `swallow-ok:`
+# marker too -- silently defeated detection. Shape (empty-aside-from-
+# comments) and exemption (a valid swallow-ok marker) are separate concerns:
+# this fragment only widens what counts as "empty"; `_match_has_swallow_ok`
+# below is the only thing that clears a hit, same as everywhere else in this
+# hook.
+_PS_WS_OR_COMMENT = r"(?:\s|#[^\r\n]*|<#[\s\S]*?#>)*"
+PS_EMPTY_CATCH = re.compile(
+    r"catch\s*(\[[^\]]*\]\s*)?\{" + _PS_WS_OR_COMMENT + r"\}", re.IGNORECASE
+)
 PS_NULL_CATCH = re.compile(
-    r"catch\s*(\[[^\]]*\]\s*)?\{\s*(\$null|continue|return)?\s*\}",
+    r"catch\s*(\[[^\]]*\]\s*)?\{" + _PS_WS_OR_COMMENT
+    + r"(\$null|continue|return)?" + _PS_WS_OR_COMMENT + r"\}",
     re.IGNORECASE,
 )
 PS_EA_MASK = re.compile(r"-ErrorAction\s+(SilentlyContinue|Ignore)\b", re.IGNORECASE)
@@ -211,19 +236,43 @@ def _is_go_generated(path, full_src):
 # unrelated bare local (`_ = count`), and does NOT fire on discarding a CALL's
 # result (`_ = f.Close()`) -- the bare-identifier-only shape is deliberate,
 # mirroring no_test_tampering.py's `_ = <var>` vs `_ = someCall()` split.
-GO_DISCARD_ERR = re.compile(r"^\s*_\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\s*$")
-# Empty `if err != nil { }` body (same-line or the file has nothing but
-# whitespace between the braces).
+#
+# The trailing `(?://.*)?` is deliberate, not decorative: an EARLIER version
+# anchored straight to end-of-line (`...\s*$`) with nothing permitted after
+# the identifier, so ANY trailing text -- not just an unmarked comment, a
+# well-formed `// swallow-ok: <reason>` too -- made the whole pattern fail to
+# match, meaning the escape-marker check (`_line_has_swallow_ok`, called
+# separately below) was never even reached. Detection (does this line discard
+# an error-shaped bare identifier) and exemption (does it carry a valid
+# marker) are separate concerns; conflating them by anchoring the SHAPE
+# pattern to "nothing else on the line" was the bug. `_ = f.Close()` still
+# does not match: a `.` immediately after the identifier is neither
+# whitespace nor a `//` comment opener, so the call-result-discard shape
+# stays unflagged exactly as before.
+GO_DISCARD_ERR = re.compile(r"^\s*_\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?://.*)?$")
+# Whitespace-or-comment filler allowed between Go braces -- same rationale as
+# GO_DISCARD_ERR above and `_PS_WS_OR_COMMENT` below: a comment is not
+# whitespace, so a bare `\s*` let any comment (marked or not) defeat "this
+# block is empty" detection. `//` line comments and `/* ... */` block
+# comments (non-greedy, `[\s\S]` so it can span lines without needing DOTALL
+# elsewhere in the pattern) are both treated as filler, not as "real code".
+_GO_WS_OR_COMMENT = r"(?:\s|//[^\n]*|/\*[\s\S]*?\*/)*"
+# Empty `if err != nil { }` body (same-line, multi-line, or with a comment
+# -- marked or not -- sitting between the braces; only `swallow-ok:` with a
+# real reason, checked separately, clears a hit).
 GO_EMPTY_ERR_CHECK = re.compile(
-    r"\bif\s+\w*[Ee]rr\w*\s*!=\s*nil\s*\{\s*\}", re.MULTILINE
+    r"\bif\s+\w*[Ee]rr\w*\s*!=\s*nil\s*\{" + _GO_WS_OR_COMMENT + r"\}", re.MULTILINE
 )
 # `if err != nil { return nil }` -- the checked error exists, but the ONLY
 # thing the block does is return nil instead of the error. Same-line and
-# 3-line forms. Deliberately narrow (a single `return nil` statement and
-# nothing else in the block) so a block that logs/wraps/re-returns the error
-# alongside a zero value is NOT caught by this pattern.
+# 3-line forms, and forms with a comment before/after `return nil`.
+# Deliberately narrow (a single `return nil` statement and nothing else,
+# comments aside, in the block) so a block that logs/wraps/re-returns the
+# error alongside a zero value is NOT caught by this pattern.
 GO_SWALLOWED_RETURN_NIL = re.compile(
-    r"\bif\s+\w*[Ee]rr\w*\s*!=\s*nil\s*\{\s*return\s+nil\s*;?\s*\}", re.MULTILINE
+    r"\bif\s+\w*[Ee]rr\w*\s*!=\s*nil\s*\{" + _GO_WS_OR_COMMENT
+    + r"return\s+nil\s*;?" + _GO_WS_OR_COMMENT + r"\}",
+    re.MULTILINE,
 )
 # Ignored second return value: `x, _ := call(...)`. WARN-ONLY (soft hit) --
 # see the module docstring's "GO SHAPE NOT RELIABLY DETECTABLE" section for
@@ -253,9 +302,7 @@ def _go_hits(added):
             )
 
     for m in GO_EMPTY_ERR_CHECK.finditer(added):
-        ln_idx = added.count("\n", 0, m.start())
-        line = lines[ln_idx] if ln_idx < len(lines) else ""
-        if _line_has_swallow_ok(line):
+        if _match_has_swallow_ok(added, m):
             continue
         hard.append(
             "an empty `if err != nil { }` body -- the error is checked and then "
@@ -265,9 +312,7 @@ def _go_hits(added):
         )
 
     for m in GO_SWALLOWED_RETURN_NIL.finditer(added):
-        ln_idx = added.count("\n", 0, m.start())
-        line = lines[ln_idx] if ln_idx < len(lines) else ""
-        if _line_has_swallow_ok(line):
+        if _match_has_swallow_ok(added, m):
             continue
         hard.append(
             "`if err != nil { return nil }` -- a checked error is discarded by "
@@ -296,6 +341,25 @@ def _line_has_swallow_ok(line):
     """True iff `line` carries a `# swallow-ok: <reason>` with a real reason."""
     m = SWALLOW_OK.search(line)
     return bool(m and m.group(1).strip())
+
+
+def _match_has_swallow_ok(text, m):
+    """True iff any line spanned by regex match `m` in `text` carries a valid
+    `swallow-ok: <reason>` marker. Now that GO_EMPTY_ERR_CHECK,
+    GO_SWALLOWED_RETURN_NIL, PS_EMPTY_CATCH, and PS_NULL_CATCH can match
+    across multiple lines (a comment sitting between the braces), the marker
+    can legitimately land on any of them -- the opening line, an interior
+    comment line, or the closing line -- mirroring the Python AST tier's
+    handler-aware window (except line / body line / comment line between).
+    Checking only the line at `m.start()` would miss a correctly-placed
+    marker on an interior line and wrongly keep blocking it."""
+    lines = text.splitlines()
+    start_ln = text.count("\n", 0, m.start())
+    end_ln = text.count("\n", 0, m.end())
+    return any(
+        _line_has_swallow_ok(lines[i])
+        for i in range(start_ln, min(end_ln, len(lines) - 1) + 1)
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -533,9 +597,7 @@ def _powershell_hits(added):
                        "that hides all errors in scope. Scope it to the call."),
     ):
         for m in pat.finditer(added):
-            ln_idx = added.count("\n", 0, m.start())
-            line = added.splitlines()[ln_idx] if added.splitlines() else ""
-            if _line_has_swallow_ok(line):
+            if _match_has_swallow_ok(added, m):
                 continue
             hits.append(why)
     return hits

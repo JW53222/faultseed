@@ -616,6 +616,44 @@ guard with a `PATH` that has every other tool it needs but not `jq`, assert
 `exit 0` on a non-`.env` path) with `jq` present — closes a real gap, not a
 hypothetical one.
 
+## 12. When you fix a bug, ask where else that shape lives
+
+> **If this mistake happened twice, where else does the same shape live?**
+
+Ask it every time, before you close the fix. It is the cheapest question in
+this document and it has the highest yield.
+
+The worked example is this guard. A mutation pass found that
+`no_swallowed_errors.py`'s Go and PowerShell branches had no test coverage.
+Writing that coverage found two real bugs: a regex anchored to end-of-line, so
+any trailing comment stopped it matching and the escape-marker check never
+ran; and the same shape in an empty-`catch` pattern that required the braces
+to be adjacent.
+
+Two bugs, correctly found, correctly fixed. Everyone involved could have
+stopped there and been right.
+
+Asking the question instead turned up **three more** — every remaining
+hard-block pattern in both language tiers had the identical flaw. Five of
+five. What had looked like a pair of defects was actually a systematic
+property: in those two tiers, any comment silently cleared any block, because
+detection stopped matching before the marker logic was ever consulted. The
+rationale-required contract did not hold in either tier at all.
+
+Two things follow, and both matter more than the specific bug:
+
+- **A repeated mistake is evidence about the author's model, not about the
+  line.** Whoever wrote the first over-anchored pattern was reasoning about
+  the shape a certain way, and wrote every sibling the same way. So look at
+  the siblings, not just the neighbours of the line you changed.
+- **Fix the class, not the instances.** Five near-identical patches kept in
+  sync is the drift shape this pack exists to catch. If you find yourself
+  making the same edit a third time, stop and fix the mechanism.
+
+Report what you looked at and what you found, including "I checked these
+three and they're genuinely unaffected." A search that came back empty is a
+result; an unasked question is not.
+
 ---
 
 ## Closing report

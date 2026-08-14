@@ -1,5 +1,5 @@
 {
-  "name": "@{{SCOPE}}/faultseed-dsh",
+  "name": "faultseed-dsh",
   "description": "dsh (DeepSeek Harness) bundle: mounts the faultseed honesty-guardrail hooks over @deepseek-ai/dsh-hooks-claude-code, unmodified, via _dispatch.py",
   "version": "0.1.0",
   "private": true,

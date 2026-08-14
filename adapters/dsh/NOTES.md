@@ -401,6 +401,261 @@ and was genericized for the same reason, even though it wasn't under that
 prefix), both return zero hits as of this correction — see the closing
 report below for the exact commands and their output.
 
+## 2026-08-14 follow-up: toolchain unblocked, a bridge-level proof, install-path verification
+
+A later session re-checked all three open items in this file: the toolchain
+wall, the install path, and the npm-publish staging. Findings below; the
+README's PARTIAL label and its "Known gaps" section were deliberately left
+untouched by this pass — see the closing note at the end of this section for
+why, and for what the earlier author of this document should decide.
+
+### Toolchain: no longer walled, no sudo needed
+
+The original blocker (`node -v` → `v20.19.2`, below dsh's `^22.19.0 ||
+>=24.0.0` floor; `pnpm` not on `PATH`) is still true of the box's SYSTEM
+Node/npm (Debian trixie ships Node 20 as `stable`; no `nodejs-22`/`nodejs-24`
+package exists in the repo; `sudo` requires a password this session doesn't
+have). It does NOT require a system change to fix:
+
+```
+$ curl -sL -o node22.tar.xz https://nodejs.org/dist/v22.19.0/node-v22.19.0-linux-x64.tar.xz
+$ tar xf node22.tar.xz   # extracted to a scratch dir, not installed system-wide
+$ export PATH="<scratch>/node-v22.19.0-linux-x64/bin:$PATH"
+$ node -v
+v22.19.0
+$ corepack enable --install-directory <scratch>/corepack-shims
+$ export PATH="<scratch>/corepack-shims:$PATH"
+$ pnpm -v
+11.7.0
+```
+
+A user-local Node 22 tarball plus `corepack enable` is entirely sufficient —
+no root, no touching the system `nodejs` package. `git clone --depth 1
+https://github.com/deepseek-ai/deepseek-harness.git` and `pnpm install
+--frozen-lockfile` both succeeded from there (28.1s for install, one
+`node-pty` native build via `node-gyp`, no errors).
+
+### A real, executed proof that does not need `DEEPSEEK_API_KEY`
+
+The full ACP e2e test (`examples/acp-agent/tests/hooks.e2e.ts`) is still
+gated on a real model call (`describe.skipIf(!process.env.DEEPSEEK_API_KEY)`)
+and no key was available — that specific test is still not run. But
+`packages/hooks/hooks-claude-code` ships its OWN real-bridge test harness
+(`tests/bridge.spec.ts` <!-- doc-ref-ok: path is inside the deepseek-harness clone, not this repo --> ) that mounts the REAL, unmodified bridge plugin, a
+REAL `@deepseek-ai/dsh-agent-loop`, and a REAL bash-executor capability, with
+only the LLM **scripted** (`MockAdapter`) rather than a live model call — the
+same "prefer the real implementation, mock only what truly can't be real"
+rule this whole package follows. Vitest runs these specs directly against
+`src/` via `vite-tsconfig-paths` (confirmed in the repo's root
+`vitest.config.ts`) — **no `pnpm build` needed either**, which the original
+research pass didn't have reason to check.
+
+A new spec file, written into that same test directory (scratch — not part
+of the dsh package, never intended to be committed to the dsh clone or
+anywhere else, and the dsh clone itself is an ephemeral scratch checkout per
+this file's existing convention), reuses that harness to run the REAL
+`adapters/dsh/hooks.json` "bash" `PreToolUse` matcher block — byte-identical
+command string — against the REAL faultseed `_dispatch.py` +
+`no_bash_test_deletion.py`, with `pluginRoot` pointed at the real faultseed
+(this repo's) checkout root via `${CLAUDE_PLUGIN_ROOT}` substitution (the
+exact mechanism `cordis.patch.yml` configures). Three cases, one file, real
+output:
+
+```
+$ FAULTSEED_ROOT=<this checkout's absolute path> pnpm vitest run \
+    packages/hooks/hooks-claude-code/tests/faultseed-e2e-proof.spec.ts --reporter=verbose
+
+--- case 1 (deny) --- {
+  ran: false,
+  isError: true,
+  text: 'Error: BLOCKED: this Bash command deletes or moves test files out of the suite.\n' +
+    '\n' +
+    '  - git rm tests/test_foo.py\n' +
+    '\n' +
+    "Deleting tests via the shell bypasses the Edit/Write tamper guards (this is exactly how the motivating incident's test delete slipped through). Removing a test is sometimes right, but it must be a deliberate, surfaced decision. Confirm with the human first. If the deletion is intended and approved, append `# delete-tests-ok: <reason>` to the command."
+}
+--- case 2 (allow) --- { ran: true, isError: false, text: 'tool ran' }
+--- case 3 (case-sensitivity) --- { ran: true, isError: false, text: 'tool ran' }
+
+ ✓ ... 1. deny: tool name "bash" + real deny command -> real BLOCKED, tool never runs 53ms
+ ✓ ... 2. allow: tool name "bash" + ordinary command -> tool runs, no block 40ms
+ ✓ ... 3. case-sensitivity: tool name "Bash" (PascalCase) + same deny command -> matcher does NOT fire, tool runs 5ms
+
+ Test Files  1 passed (1)
+      Tests  3 passed (3)
+```
+
+**Reproducer** (not shipped anywhere — this describes a file written into a
+scratch `deepseek-harness` clone's own `packages/hooks/hooks-claude-code/tests/`
+directory, run there, then discarded with the clone; nothing under
+`adapters/dsh/` depends on it existing):
+
+```ts
+// packages/hooks/hooks-claude-code/tests/faultseed-e2e-proof.spec.ts
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { describe, expect, it } from 'vitest'
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { Context } from '@deepseek-ai/cordis'
+import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
+import type { Agent } from '@deepseek-ai/dsh-agent'
+import AgentLoop from '@deepseek-ai/dsh-agent-loop'
+import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
+import { LocalBashExecutor } from '@deepseek-ai/dsh-bash-local'
+import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
+import * as HooksClaude from '@deepseek-ai/dsh-hooks-claude-code'
+import { MockAdapter, toolCallResponse, textResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
+
+function events(agent: Agent): SessionEvent[] { return [...agent.session.events] }
+
+const faultseedRoot = process.env.FAULTSEED_ROOT
+if (!faultseedRoot) throw new Error('FAULTSEED_ROOT env var required')
+
+async function runCase(toolName: string, command: string) {
+  const dir = mkdtempSync(join(tmpdir(), 'faultseed-e2e-'))
+  try {
+    writeFileSync(join(dir, 'hooks.json'), JSON.stringify({ hooks: { PreToolUse: [{
+      matcher: 'bash',
+      hooks: [{ type: 'command', command: 'python3 "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/_dispatch.py" no_bash_test_deletion.py' }],
+    }] } }))
+    const adapter = new MockAdapter([toolCallResponse('c1', toolName, { command }), textResponse('done')])
+    const ctx = new Context()
+    await mountAgentLoopTestDependencies(ctx)
+    await ctx.plugin(AgentLoop, { agents: [] })
+    await ctx.plugin(LocalSubprocessRuntime)
+    await ctx.plugin(LocalBashExecutor, { timeoutMs: 10_000 })
+    let ran = false
+    ctx.tools.register(defineContentToolFixture({
+      name: toolName, description: 'fixture tool for the matcher-subject proof', parameters: {},
+      async execute() { ran = true; return [{ type: 'text', text: 'tool ran' }] },
+    }))
+    await ctx.plugin(HooksClaude, { configPath: join(dir, 'hooks.json'), pluginRoot: faultseedRoot })
+    ctx.llm.registerAdapter(['mock'], adapter)
+    const agent = ctx.agentLoop.create(SessionId('a1'), { provider: 'mock', model: 'mock' })
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }))
+    await agent.whenIdle()
+    const result = events(agent).find(e => e.type === 'tool/result')
+    const isError = result?.type === 'tool/result' ? result.data.message.content[0].isError as boolean : undefined
+    const text = result?.type === 'tool/result'
+      ? (result.data.message.content[0].content.find((b: { type: string }) => b.type === 'text') as { text: string } | undefined)?.text
+      : undefined
+    return { ran, isError, text }
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+}
+
+describe('faultseed proof', () => {
+  it('1. deny: tool name "bash" + real deny command -> real BLOCKED, tool never runs', async () => {
+    const { ran, isError, text } = await runCase('bash', 'git rm tests/test_foo.py')
+    expect(ran).toBe(false); expect(isError).toBe(true)
+    expect(text).toContain('BLOCKED: this Bash command deletes or moves test files out of the suite.')
+  })
+  it('2. allow: tool name "bash" + ordinary command -> tool runs, no block', async () => {
+    const { ran, isError } = await runCase('bash', 'ls -la')
+    expect(ran).toBe(true); expect(isError).toBe(false)
+  })
+  it('3. case-sensitivity: tool name "Bash" (PascalCase) + same deny command -> matcher does NOT fire', async () => {
+    const { ran, isError } = await runCase('Bash', 'git rm tests/test_foo.py')
+    expect(ran).toBe(true); expect(isError).toBe(false)
+  })
+})
+```
+
+To reproduce: shallow-clone `deepseek-ai/deepseek-harness`, get a Node
+`^22.19.0`/pnpm `11.7.0` toolchain on `PATH` (a user-local Node tarball +
+`corepack enable --install-directory <dir>` needs no root — see above),
+`pnpm install --frozen-lockfile` at the clone root, save the file above at
+the path in its own first comment line, then run the command shown in the
+output block above with `FAULTSEED_ROOT` set to this repo's checkout root.
+
+What this DOES resolve, by running real code rather than reading it:
+
+- **Known-gaps bullet #2 in README.md** ("Matcher translation... I did not
+  run a dsh agent to confirm these are the literal strings that reach
+  `matchQuery`") — case 1 vs. case 3 above IS that confirmation: a tool
+  literally named `'bash'` is matched and blocked by the real
+  `matchesMatcher`/`tools/pre-execute` path; the SAME deny command against a
+  tool literally named `'Bash'` (Claude Code's own PascalCase name) is NOT
+  matched and runs — through real, unmodified dsh matcher code, not the hand
+  ported description of it.
+- The "What a future maintainer MUST re-check" item #4 above ("whether
+  `matchQuery` passed to `tools/pre-execute` is actually the tool's `name`
+  field") — confirmed by running: a fixture tool registered under `name`
+  IS what the matcher sees.
+- `${CLAUDE_PLUGIN_ROOT}` substitution via the `pluginRoot` config field —
+  exercised for real (case 1's command resolves through it to the real
+  `_dispatch.py`), not just read from `config.ts`.
+
+What this does NOT resolve — still open, still real gaps:
+
+- This is not a live `dsh` CLI process, and no LLM produced the tool call —
+  it was scripted (`MockAdapter`). The one thing genuinely unique to a live
+  agent (a real model choosing to call `bash` with that exact command) is
+  still unobserved.
+- Item #5 (Code Mode / `dsh-code-runtime-worker-thread` effect on tool
+  identity) and item #6 (`ctx.shell`'s env-scrub behavior) are untouched by
+  this proof — it doesn't route through Code Mode or exercise ambient env
+  forwarding at all.
+- The full `ToolBash` plugin (`packages/shell/tool-bash`) was not mounted —
+  it additionally injects `systemPrompt`/`shellEnv` capability seams beyond
+  this proof's scope. The fixture tool used here is registered under the
+  identical literal name (`'bash'`, confirmed by reading
+  `packages/shell/tool-bash/src/index.ts:243`'s `defineTool({ name: 'bash'
+  })`) but is not the real tool-bash plugin's own registration code path.
+
+### Install-path verification (task 2)
+
+Documented in `README.md`'s Install section (the GitHub-direct paragraph)
+with the exact commands and their real output. Summary: `dsh plugin
+--profile <name> add "github:JW53222/faultseed#path:adapters/dsh"` is the
+correct, verified syntax (pnpm's `#path:<subdir>` git-subdirectory
+resolution — confirmed via a real `pnpm add` against the real public repo,
+which got exactly as far as reading `adapters/dsh/package.json` out of the
+fetched tarball before failing). It currently fails, live, against the real
+repo, with `Invalid name: "@{{SCOPE}}/faultseed-dsh"` — the `{{SCOPE}}`
+placeholder blocks GitHub-direct install today, independent of the npm
+publish question this file already tracked. This was NOT something the
+"no build step, so it should be clean" framing predicted; it needed running
+the real install to find. The plain `npm install` equivalent of the same
+spec does not work AT ALL (confirmed by grepping the installed npm's own
+`pacote` for `gitSubdir` — zero matches outside `npm-package-arg`, which
+parses the token but nothing downstream applies it) — this only works
+because `dsh plugin add` forwards to pnpm, not npm.
+
+Also checked: `private: true` does NOT block a package from being installed
+as a dependency (confirmed: a scratch copy with a valid name and
+`private: true` still install cleanly via `pnpm add <local-path>`) — only the
+`{{SCOPE}}` name defect blocks the GitHub-direct path. `git ls-files
+adapters/dsh` vs. `package.json`'s `files` array: every `files` entry exists
+in the tree; no gap. `files` is irrelevant to a GitHub-direct install anyway
+(a git-ref tarball fetch ships the whole tracked subdirectory, not an `npm
+pack`-filtered one) — only relevant to the npm-publish path.
+
+### Publish-prep script (task 3)
+
+`bin/prepare-npm-publish.sh` — see `README.md`'s "Publishing to npm" section
+for usage and what it does. Not run against this package's real
+`package.json` (still `private: true`, still `{{SCOPE}}`, unchanged by this
+session — verified with `git status`/`git diff` before finishing). Verified
+against THREE scratch copies instead: a normal run (all three fields flip,
+verification passes), an invalid `SCOPE` (rejected before any write), and a
+simulated `files`/disk mismatch (verification fails, original
+`package.json` restored byte-for-byte from its backup, confirmed by
+re-reading it afterward).
+
+### Why README.md's PARTIAL label and "Known gaps" wording were left alone
+
+This session found real, run (not read) evidence that narrows two
+previously-flagged unverified assumptions. It deliberately did not edit
+README.md's top-of-file PARTIAL characterization or its "Known gaps"
+section's matcher-translation bullet, even though both are now stale in
+light of the above — a prior instruction on this exact adapter states the
+label's wording is to be owned by whoever requested this follow-up, not
+decided unilaterally by whoever produces new evidence. This section is that
+evidence, written down precisely so that decision can be made with full
+information.
+
 ## Closing report (per honesty-guardrails.md)
 
 **Changed outside the literal request:** none. Every file written is under
@@ -423,3 +678,10 @@ publish`/`gh` command was run.
 - `integrator_transcript_compactor.py` cannot be wired at all today (no
   `PreCompact` event in the bridge) — documented as a real gap, not silently
   dropped.
+
+**(2026-08-14 follow-up note, appended, not editing the above): items #3 and
+#4 immediately above are now partially superseded** — see "A real, executed
+proof that does not need DEEPSEEK_API_KEY" above for exactly what is now
+run-verified vs. what remains open. The original bullets are left as written
+above (historical accuracy of what THAT session knew at the time); this note
+exists so a reader of just the closing report doesn't miss the update.

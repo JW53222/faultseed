@@ -265,3 +265,65 @@ def test_engine_scope_gate_both_directions(tmp_path):
 
     out_of_scope = _run(tmp_path, "other/foo.py", content)
     assert out_of_scope.returncode == 0, out_of_scope.stderr
+
+
+# --------------------------------------------------------------------------- #
+# Module-level (non-class) TYPE_CHECKING-only stub. Every fixture above wraps
+# the stub inside a class -- `_find_stubs()` has a SEPARATE, un-exercised
+# code path for module-level defs (the "module-level" block near the top of
+# `_find_stubs`, using `tree.body` directly rather than walking ClassDef
+# nodes). A mutation pass proved this: disabling just that loop left every
+# other test in this file (and the example) green, while an untouched
+# control still blocked a bare module-level stub the mutant allowed.
+# --------------------------------------------------------------------------- #
+
+def test_module_level_stub_no_runtime_def_blocked(tmp_path):
+    content = (
+        "from typing import TYPE_CHECKING\n"
+        "if TYPE_CHECKING:\n"
+        "    def helper(x: int) -> int: ...\n"
+    )
+    r = _run(tmp_path, "src/foo.py", content)
+    assert r.returncode == 2, r.stderr
+    assert "TYPE_CHECKING-only stub, no runtime def" in r.stderr
+    assert "`helper` (module level)" in r.stderr
+
+
+def test_module_level_stub_with_matching_runtime_def_allowed(tmp_path):
+    # Near-miss: the module docstring's "stub-plus-impl pattern" is
+    # legitimate at module level too, not just inside a class.
+    content = (
+        "from typing import TYPE_CHECKING\n"
+        "if TYPE_CHECKING:\n"
+        "    def helper(x: int) -> int: ...\n"
+        "def helper(x):\n"
+        "    return x\n"
+    )
+    r = _run(tmp_path, "src/foo.py", content)
+    assert r.returncode == 0, r.stderr
+
+
+def test_module_level_stub_host_provides_marker_with_reason_allowed(tmp_path):
+    content = (
+        "from typing import TYPE_CHECKING\n"
+        "if TYPE_CHECKING:\n"
+        "    # host-provides: injected by the plugin loader at runtime\n"
+        "    def helper(x: int) -> int: ...\n"
+    )
+    r = _run(tmp_path, "src/foo.py", content)
+    assert r.returncode == 0, r.stderr
+
+
+def test_module_level_stub_bare_marker_without_reason_not_cleared(tmp_path):
+    # Same rule as the class-scoped bare-marker test above: a marker with no
+    # rationale after the colon does NOT count as an escape, at module level
+    # either.
+    content = (
+        "from typing import TYPE_CHECKING\n"
+        "if TYPE_CHECKING:\n"
+        "    # host-provides\n"
+        "    def helper(x: int) -> int: ...\n"
+    )
+    r = _run(tmp_path, "src/foo.py", content)
+    assert r.returncode == 2, r.stderr
+    assert "TYPE_CHECKING-only stub, no runtime def" in r.stderr
