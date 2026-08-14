@@ -1,0 +1,74 @@
+{
+  "_comment": "Generated from faultseed's own docs/hook-manifest.yaml via generate_settings_json.py --target python_default, then hand-adapted for dsh in two ways documented in NOTES.md: (1) $CLAUDE_PROJECT_DIR -> ${CLAUDE_PLUGIN_ROOT} in every command, since dsh's hooks-claude-code bridge (packages/hooks/hooks-claude-code/src/config.ts substituteCommand) supports that token independently of CLAUDE_PROJECT_DIR, and _dispatch.py itself must be located at a fixed path regardless of which project dsh is running against; (2) every matcher translated from Claude Code's PascalCase tool names to dsh's own native tool names (see NOTES.md 'Tool-name matcher translation'). PreCompact is intentionally omitted: dsh's hooks-claude-code CLAUDE_EVENTS list (config.ts) does not include PreCompact, so integrator_transcript_compactor.py cannot be wired through this bridge today -- see NOTES.md.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "edit|write|str_replace_editor",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/.claude/hooks/_dispatch.py\" protect-files.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "edit|write|str_replace_editor",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/.claude/hooks/_dispatch.py\" no_test_tampering.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/.claude/hooks/_dispatch.py\" no_swallowed_errors.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/.claude/hooks/_dispatch.py\" no_type_checking_stub.py"
+          }
+        ]
+      },
+      {
+        "matcher": "subagent|subagent_fork",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/.claude/hooks/_dispatch.py\" agent_sizing_gate.py"
+          }
+        ]
+      },
+      {
+        "matcher": "workflow",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/.claude/hooks/_dispatch.py\" workflow_agent_sizing_gate.py"
+          }
+        ]
+      },
+      {
+        "matcher": "bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/.claude/hooks/_dispatch.py\" no_bash_test_deletion.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/.claude/hooks/_dispatch.py\" no_bash_test_mutation.py"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/.claude/hooks/_dispatch.py\" subagent_closing_report.py"
+          }
+        ]
+      }
+    ]
+  }
+}

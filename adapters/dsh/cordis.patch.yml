@@ -1,0 +1,68 @@
+# faultseed -> dsh bundle patch.
+#
+# Mounts ONE new row over whatever profile installs this bundle: the
+# unmodified Claude-Code-hooks bridge (@deepseek-ai/dsh-hooks-claude-code,
+# confirmed real at packages/hooks/hooks-claude-code/package.json in the
+# deepseek-harness tree), pointed at this package's ./hooks.json. The bridge
+# itself is dialect-neutral glue -- it runs whatever `hooks.json` says,
+# unmodified from how Claude Code's own settings.json would be interpreted
+# (packages/hooks/hooks-claude-code/src/config.ts:parseClaudeCodeConfig
+# accepts a bare `{hooks: {...}}` object, the same shape faultseed's own
+# generate_settings_json.py emits). No dsh-side guard logic lives in this
+# patch or in hooks.json -- every actual decision is still made by the
+# faultseed Python hooks, unmodified, via _dispatch.py.
+#
+# Two config fields carry the two distinct roots this bridge needs kept
+# separate (see adapters/dsh/NOTES.md "projectDir vs pluginRoot" for the
+# full reasoning):
+#
+#   - pluginRoot -> substitutes ${CLAUDE_PLUGIN_ROOT} in hooks.json's
+#     commands (config.ts's own substitution token, same one a real Claude
+#     Code plugin install relies on). Must be the ABSOLUTE path to your
+#     faultseed checkout root (the directory that contains .claude/hooks/
+#     and .claude/hooks/_dispatch.py) -- NOT this adapter package's own
+#     directory. This is how hooks.json finds _dispatch.py regardless of
+#     which project dsh is actually running against.
+#
+#   - projectDir -> substitutes ${CLAUDE_PROJECT_DIR} (unused in this
+#     package's hooks.json, which uses pluginRoot exclusively for command
+#     paths) AND is exported as the literal CLAUDE_PROJECT_DIR env var for
+#     every hook subprocess. no_swallowed_errors.py / no_type_checking_stub.py
+#     read docs/audit/audit-scope.yaml's engine_dirs relative to
+#     CLAUDE_PROJECT_DIR (via _common.py's is_engine_path()), so this MUST be
+#     your actual target project's root, not faultseed's. Defaults to
+#     process.cwd() (the dsh launch directory) when unset.
+#
+# Both env vars below are placeholders you set before `dsh` boots -- this
+# patch does not invent a config key beyond the three the bridge already
+# declares (configPath/pluginRoot/projectDir, all three confirmed at
+# packages/hooks/hooks-claude-code/src/index.ts's `Config` schema). The two
+# env var NAMES themselves (HOOKS_HARNESS_ROOT, HOOKS_HARNESS_DSH_HOOKS_JSON)
+# are this adapter's own invented glue, not dsh config keys. They are
+# DELIBERATELY generic rather than faultseed-substituted: shell variable names
+# cannot contain the `{`, `}`, or `-` characters faultseed/{{SCOPE}} may
+# resolve to (npm package names are commonly hyphenated), so embedding the
+# product-name token in a shell identifier would produce a template that is
+# syntactically invalid the moment someone fills it in. Rename these two
+# identifiers to something faultseed-specific only if you're certain your
+# chosen name is already a valid, hyphen-free shell identifier once
+# uppercased.
+#
+# _dispatch.py still needs to find the REAL guardrail scripts
+# (no_test_tampering.py, no_swallowed_errors.py, ...) once it starts running,
+# using ITS OWN resolution order (env AUDIT_HARNESS_HOOKS_DIR -> your target
+# project's harness.env -> co-located default). Since faultseed is installed
+# SEPARATELY from your dsh target project in this topology, drop a
+# `harness.env` file in your target project's root:
+#
+#   AUDIT_HARNESS_HOOKS_DIR=/absolute/path/to/faultseed/.claude/hooks
+#
+# See adapters/dsh/README.md's Install section for the full step list.
+
+- insert:
+    - id: 'faultseed-hooks-claude-code'
+      name: '@deepseek-ai/dsh-hooks-claude-code'
+      config:
+        configPath: !!js process.env.HOOKS_HARNESS_DSH_HOOKS_JSON ?? './hooks.json'
+        pluginRoot: !!js process.env.HOOKS_HARNESS_ROOT
+        projectDir: !!js process.env.CLAUDE_PROJECT_DIR ?? process.cwd()

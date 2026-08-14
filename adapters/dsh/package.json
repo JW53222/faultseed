@@ -1,0 +1,21 @@
+{
+  "name": "@{{SCOPE}}/faultseed-dsh",
+  "description": "dsh (DeepSeek Harness) bundle: mounts the faultseed honesty-guardrail hooks over @deepseek-ai/dsh-hooks-claude-code, unmodified, via _dispatch.py",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "files": [
+    "cordis.patch.yml",
+    "hooks.json",
+    "bin/smoke-test.sh",
+    "bin/codec-mapping-proof.mjs",
+    "README.md",
+    "NOTES.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

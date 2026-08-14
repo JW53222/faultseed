@@ -1,0 +1,85 @@
+# audit-scope.yaml -- tells the engine-quality guardrails which directories
+# are "your source code" vs. everything else (docs, tests, config, tooling).
+#
+# WHY THIS FILE MUST EXIST, AND WHY IT'S SHORT: `.claude/hooks/_common.py`'s
+# `is_engine_path()` (_common.py:256-281) is how `no_swallowed_errors.py` and
+# `no_type_checking_stub.py` decide whether an edit is even in scope for
+# them. It loads the `engine_dirs` list below via `_load_engine_dirs()`
+# (_common.py:197-232), resolved relative to `_AUDIT_SCOPE_ROOT`
+# (_common.py:169) -- the HOOK's own install location on disk, computed from
+# `__file__`, NOT the project directory the agent happens to be editing
+# (`project_dir()` / `$CLAUDE_PROJECT_DIR`; see the comment at
+# _common.py:150-168 for why that distinction is deliberate). In this repo
+# that resolves to `docs/audit/audit-scope.yaml` next to wherever
+# `.claude/hooks/` itself is installed.
+#
+# Two failure modes to know about, both real, both verified against the code
+# above:
+#   1. MISSING OR MALFORMED FILE -- loud, not silent. `is_engine_path()`
+#      catches `AuditScopeLoadError` and calls `block()` (_common.py:84-93,
+#      which writes to stderr and calls `sys.exit(2)`) -- see
+#      _common.py:274-280. Exit 2 is what makes Claude Code treat a hook
+#      call as blocked; if you delete this file, or break its YAML, or omit
+#      `engine_dirs`, every edit that would run `no_swallowed_errors.py` or
+#      `no_type_checking_stub.py` starts failing loudly instead of being
+#      silently skipped.
+#   2. WRONG PATHS -- silent, not loud. `is_engine_path()` just checks
+#      whether an edited file's top-level path segment is `in engine_dirs`
+#      (_common.py:271,281) and returns False if not -- no error, no
+#      warning. If the list below doesn't match where your source actually
+#      lives, those two hooks quietly stop checking anything, forever, and
+#      nothing will tell you. They are path-scoped and otherwise
+#      role-independent: wrong path here means zero coverage there, not
+#      reduced risk there.
+#
+# EDIT THIS: "src" is a placeholder, not a scan of your layout. Replace it
+# with the actual top-level directories that hold your hand-written source
+# (e.g. `backend`, `app`, `lib` -- whatever sits at the repo root). List
+# every one; `engine_dirs` is a flat list of first-path-segment strings, not
+# a glob.
+engine_dirs:
+  - "src"
+
+# generated_paths -- OPTIONAL, unlike engine_dirs above. Path PREFIXES
+# (matched with a plain `rel.startswith(prefix)` in `is_generated_path()`,
+# _common.py -- NOT the first-segment-only match `engine_dirs` uses) that the
+# same two engine-quality guardrails should treat as generated/vendored
+# output rather than hand-authored source: mutation-test output, a
+# compiled/trained-model cache, a checked-in `dist/`/`build/` tree -- anywhere
+# a finding is a build artifact, not an honesty failure. A prefix can point
+# arbitrarily deep under an engine_dirs entry (e.g. "backend/mutants/"), not
+# just at a top-level directory, which is why this needs its own list rather
+# than reusing engine_dirs.
+#
+# MISSING vs MALFORMED -- deliberately DIFFERENT failure modes than
+# engine_dirs above:
+#   - Section absent entirely (the common case -- most repos have nothing to
+#     exempt) -- behaves exactly like an empty list: "exempt nothing" from
+#     the two guardrails. This is the SAFE default, because it can only make
+#     those guardrails check MORE of your tree, never less; unlike a missing
+#     `engine_dirs`, an absent `generated_paths` does NOT block.
+#   - Section present but malformed (not a list of strings) -- BLOCKs loudly,
+#     same as a malformed engine_dirs. That shape means someone tried to
+#     configure this and got it wrong, which must surface, not silently
+#     resolve to "exempt nothing" the way a merely-absent section does.
+#
+# EDIT THIS ONLY IF YOU HAVE ONE: the example below is commented out on
+# purpose. These are this repo's own example prefixes -- carried over from
+# wherever these hooks were last used in anger -- and almost certainly do not
+# match anything in YOUR tree. If your repo has no generated/vendored trees
+# under an engine_dirs path, leave this section out entirely; the guardrails
+# already handle that correctly (see MISSING vs MALFORMED above).
+# generated_paths:
+#   - "backend/mutants/"                              # mutation-test output
+#   - "backend/scripts/llm_stack/unsloth_compiled_cache/"  # vendored/compiled trainer code
+
+# hook_fp_scan_dirs is not read by anything in this repo -- confirmed:
+# `grep -r hook_fp_scan_dirs` across this tree matches only this file. It was
+# a companion list for a false-positive self-test script that isn't included
+# in this delivery (see .claude/hooks/README.md's scope banner for what did
+# and didn't ship). Left in place rather than deleted because it costs
+# nothing to keep and doesn't affect anything the hooks above do; if you
+# never build that self-test yourself, you can ignore or delete this
+# section freely. Keep it in sync with `engine_dirs` above only if you do.
+hook_fp_scan_dirs:
+  - "src"

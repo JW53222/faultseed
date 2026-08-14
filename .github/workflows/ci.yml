@@ -1,0 +1,51 @@
+# CI -- runs the exact same command a stranger runs locally: ./run_tests.sh.
+# That script itself runs every pytest suite in the tree PLUS the examples/
+# planted-failure checks, and treats a suite that collects/asserts zero
+# tests as a failure, not a pass -- see run_tests.sh's own header comment.
+#
+# This job must be able to go red. There is no `continue-on-error`, no
+# `|| true`, and no step that swallows run_tests.sh's exit code -- a CI job
+# that cannot fail would be exactly the defect this whole repo exists to
+# make loud, shipped in its own CI.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: run_tests.sh (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10 is the floor this repo declares for itself (see
+        # .claude/hooks/check_interpreter_floor.py and the header comment
+        # in .claude/hooks/_common.py: a module-level PEP-604 union
+        # annotation raises TypeError at import below 3.10, which the
+        # Claude Code hook protocol treats as a silent, non-blocking
+        # PERMIT -- every guard fails open under it). 3.11 and 3.13 round
+        # out a small matrix without turning this into a full CPython
+        # support-grid job.
+        python-version: ["3.10", "3.11", "3.13"]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install jq (protect-files.sh and examples/ both need it)
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Install Python dependencies
+        run: python3 -m pip install --upgrade pip pytest pyyaml
+
+      - name: Run the full suite
+        run: ./run_tests.sh

@@ -1,0 +1,224 @@
+# hook-manifest.yaml -- declarative data consumed by
+# .claude/hooks/generate_settings_json.py to build a per-target
+# `.claude/settings.json`. Read that script's own docstring for the full
+# generation algorithm; this file's comments explain the DATA shape it
+# expects and what each field controls.
+#
+# --- `class`: which hooks CAN be wired, per target language profile ---
+# Every entry under `hooks:` below has a `class`. `_is_eligible()` in the
+# generator reads it to decide, per target profile (see `targets:` below),
+# whether a hook gets wired into settings.json:
+#   P   = wireable for every profile (language-agnostic).
+#   GG  = has a real per-profile gap. `fixed_for_go: true/false` records
+#         whether the Go-specific version of the check has been built.
+#         Eligible for profile "python" unconditionally (python is this
+#         hook set's home language); eligible for profile "go" only if
+#         `fixed_for_go: true`.
+#   PP  = the defect this hook catches can only happen in Python (e.g. a
+#         `TYPE_CHECKING`-only method stub with no runtime `def` --
+#         meaningless in Go, which has no such construct). Eligible for
+#         profile "python" only.
+#   LIB = a shared module other hooks import (`_common.py`) -- not itself
+#         an event-triggered hook, never appears in settings.json.
+# Any class value other than P/GG/PP is treated by `_is_eligible()` as
+# always-ineligible, same as no class at all -- that's the right label for
+# a hook that should never be auto-wired (a self-test script, or a check
+# whose defect shape doesn't exist outside one specific origin codebase).
+# This repo doesn't ship any hook file in that always-excluded bucket; every
+# entry below is either wireable (P/GG/PP) or the one library module (LIB).
+#
+# A hook may also declare a per-profile `profiles: {<profile>: true|false}`
+# override, which wins outright over the class default for the profile keys
+# it names (a profile key it doesn't name still falls through to the class
+# default).
+#
+# `events:` entries (`{event: <hook event name>, matcher: <tool matcher>}`)
+# are only meaningful for a hook that's eligible for at least one profile.
+#
+# --- `layer` / `packs:` / `--pack`: mechanical vs. doctrine, an
+#     independent second axis ---
+# `class` answers "does this hook apply to Go vs. Python code"; `layer`
+# answers "is this enforcement machinery (`mechanical`) or a prose document
+# (`doctrine`)". `--pack` on the generator selects which `layer` values are
+# active (`packs:` below maps a pack name to a `layers:` list) -- it's a way
+# to generate a mechanicals-only settings.json (pack C) without touching
+# hook eligibility (`class`/profile still apply on top of the pack filter).
+# In THIS repo every hook below is `layer: mechanical` and nothing is
+# `layer: doctrine`, so pack B and pack C produce byte-identical
+# settings.json; pack D (doctrine-only) resolves to zero hooks --
+# `{"hooks": {}}` -- which is why `packs.D.allow_empty: true` is required
+# and explicit (the generator refuses to write an empty hook set silently
+# otherwise; see `EmptyHookSetError` in generate_settings_json.py).
+#
+# --- `stages:` / `--stage`: a currently-inert extension point ---
+# `--stage` selects extra items from a `docs:`/`tools:` section, the same
+# way `--pack` selects from `layer`. This repo doesn't populate either
+# section (see the note where `tools:` used to be, below `stages:`), so
+# every `--stage` value produces the same settings.json as `--stage none`;
+# only `--stage e1`/`--stage e2` additionally attempt to build a separate
+# tools manifest (`--tools-out`), which resolves to zero tools here (see
+# that note for why, and what used to happen instead). `stages.none` must
+# be declared explicitly (`layers: []`) -- the generator requires a real
+# `stages:` section once any manifest declares one at all, rather than
+# treating an absent stage as an implicit no-op.
+#
+# --- absolute paths / interpreter pinning ---
+# `--abs-root <path>` bakes that literal path into every generated hook
+# command instead of `$CLAUDE_PROJECT_DIR` -- needed if whatever runs the
+# hooks doesn't have `$CLAUDE_PROJECT_DIR` pointed at this repo's own
+# install location (e.g. a settings.json generated here but mounted against
+# a different working tree). `--interpreter <path>` pins the `python3`
+# invoked by every generated command to a specific interpreter instead of
+# whatever `python3` resolves to on PATH at hook-run time (PATH can change
+# mid-session, e.g. `source venv/bin/activate`). Both default to unset,
+# which reproduces this repo's own byte-identical, var-relative,
+# bare-`python3` output.
+
+hooks:
+  # --- class P: wireable for every profile ---
+  agent_sizing_gate.py:
+    class: P
+    layer: mechanical
+    order: 6
+    events:
+      - {event: PreToolUse, matcher: "Agent"}
+  protect-files.sh:
+    class: P
+    layer: mechanical
+    order: 2
+    events:
+      - {event: PreToolUse, matcher: "Edit|Write"}
+  workflow_agent_sizing_gate.py:
+    class: P
+    layer: mechanical
+    order: 7
+    events:
+      - {event: PreToolUse, matcher: "Workflow"}
+  subagent_closing_report.py:
+    class: P
+    layer: mechanical
+    order: 9
+    events:
+      - {event: SubagentStop}
+  integrator_transcript_compactor.py:
+    class: P
+    layer: mechanical
+    order: 11
+    events:
+      - {event: PreCompact}
+
+  # --- class GG: real per-profile gap; fixed_for_go records Go coverage ---
+  no_test_tampering.py:
+    class: GG
+    layer: mechanical
+    order: 3
+    fixed_for_go: true  # a Go-aware test-tampering pattern set exists
+    events:
+      - {event: PreToolUse, matcher: "Edit|Write|MultiEdit"}
+  no_swallowed_errors.py:
+    class: GG
+    layer: mechanical
+    order: 4
+    fixed_for_go: true  # a Go-aware swallow-pattern analyzer exists
+    events:
+      - {event: PreToolUse, matcher: "Edit|Write|MultiEdit"}
+  no_bash_test_deletion.py:
+    class: GG
+    layer: mechanical
+    fixed_for_go: false  # its file-matching regex only recognizes Python's
+                         # test naming convention (test_*.py / *_test.py),
+                         # not Go's (*_test.go) -- still eligible for
+                         # profile "python" via the class default above.
+    events:
+      - {event: PreToolUse, matcher: "Bash"}
+  no_bash_test_mutation.py:
+    class: GG
+    layer: mechanical
+    fixed_for_go: false  # same gap as no_bash_test_deletion.py above
+    events:
+      - {event: PreToolUse, matcher: "Bash"}
+
+  # --- class PP: defect shape is Python-only ---
+  no_type_checking_stub.py:
+    class: PP
+    layer: mechanical
+    order: 4
+    events:
+      - {event: PreToolUse, matcher: "Edit|Write|MultiEdit"}
+
+  # --- library: not itself a hook, never appears in settings.json ---
+  _common.py: {class: LIB, layer: both-excluded}
+
+# `docs:` and `tools:` sections intentionally omitted. Both existed upstream
+# to let `--stage` mount extra doctrine documents / knowledge-query tooling
+# on top of the hooks above, but every path either kind of entry would have
+# named here (project-specific behavioral docs, `backend/scripts/*.py`
+# callgraph and embedding-search tools) belongs to the internal project this
+# hook set was extracted from and isn't part of this repo. Concretely: this
+# generator's `resolve_doc_set()` is never called by its own `main()` at
+# all, so a populated `docs:` section wouldn't even be reachable from the
+# command line here. `resolve_tool_set()` IS reachable, via `--stage e1` or
+# `--stage e2` -- before this file was trimmed, requesting either of those
+# would shell out to `python3 <nonexistent-path> --help` for tools this repo
+# doesn't ship, and (because nothing checked the subprocess's exit code)
+# silently embed each interpreter's "No such file or directory" error into
+# the generated tools manifest as if it were real tool documentation. With
+# no `tools:` entries, `--stage e1`/`--stage e2` now fail loudly instead
+# (`EmptyToolSetError`, nonzero exit) -- consistent with this generator's
+# own stated anti-vacuity design elsewhere (see `EmptyHookSetError` in
+# generate_settings_json.py). `--stage none` (the default) is unaffected
+# either way. If you build your own knowledge-query tooling for this repo,
+# add a `tools:` section back with `layer: knowledge-tools` entries pointing
+# at scripts that actually exist here, plus a `stages:` entry admitting that
+# layer (see `stages:` below).
+
+# Packs: which `layer` values `--pack <name>` activates. An entry (hook,
+# or in principle a doc) is included only if its own `layer` is in the
+# selected pack's `layers:` list.
+packs:
+  B:
+    layers: [mechanical, doctrine]
+    description: >-
+      Default pack. Every hook below is layer: mechanical, so this includes
+      all of them; layer: doctrine currently selects nothing (no doc corpus
+      is tracked in this manifest -- see the note above `packs:`).
+  C:
+    layers: [mechanical]
+    description: >-
+      Mechanicals-only. Identical hook set to pack B in this repo, since no
+      hook here is layer: doctrine.
+  D:
+    layers: [doctrine]
+    allow_empty: true
+    description: >-
+      Doctrine-only. Resolves to zero hooks here (nothing is layer:
+      doctrine) -- settings.json becomes {"hooks": {}}. allow_empty: true is
+      required for the generator to accept that as intentional rather than
+      a bug; see generate_settings_json.py's EmptyHookSetError.
+
+# Stages: which extra `layer` values `--stage <name>` activates, additively
+# on top of whatever `--pack` already selected. `none` must be present and
+# explicit (empty `layers: []`), not omitted.
+stages:
+  none:
+    layers: []
+    description: "no extra layers -- the default, and the only stage that behaves differently in this repo (see the note above packs:)."
+  e1:
+    layers: [knowledge-tools]
+    description: "would activate a tools: section's knowledge-tools entries; this repo has none (see the note above packs:)."
+  e2:
+    layers: [knowledge-tools, knowledge-docs]
+    description: "superset of e1; would additionally activate knowledge-docs entries. This repo has none of either."
+
+# Per-target install profiles. `profile: <name>` selects a class-eligibility
+# profile (see the `class` section above); the profile name itself isn't
+# otherwise interpreted. `gitea` names the profile this hook set's Go
+# support (class GG's `fixed_for_go`) was first built and tested against --
+# it's just a label for "profile: go" with a memorable origin, not a
+# reference to anything shipped in this repo. `python_default` is the
+# straightforward "profile: python" case.
+targets:
+  gitea:
+    profile: go
+  python_default:
+    profile: python
