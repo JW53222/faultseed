@@ -189,11 +189,21 @@ not "verified under a live agent."
      `bin/prepare-npm-publish.sh` (below) rewrites the name to its scoped
      form (`@<scope>/faultseed-dsh`) at publish time, and ONLY there. Local
      re-verification (a scratch `pnpm add` against a local copy of this
-     directory with the fixed name) installs cleanly with no error. The live
-     GitHub fetch above was run against the version of this repo that
-     predates this fix, so re-running the exact command shown once this
-     change has been merged/pushed is the outstanding step to close the
-     loop — noted here rather than claimed without having re-run it.
+     directory with the fixed name) installs cleanly with no error.
+   - **Loop closed, re-run against the real public repo after the fix was
+     pushed:**
+     ```
+     $ pnpm add "github:JW53222/faultseed#path:adapters/dsh"
+     Packages: +1
+     dependencies:
+     + faultseed-dsh 0.1.0
+     Done in 2.1s using pnpm v9.15.9
+     ```
+     Exit 0. All four runtime files arrive —`cordis.patch.yml`, `hooks.json`,
+     `bin/smoke-test.sh`, `bin/codec-mapping-proof.mjs` — confirmed present in
+     the installed package, not merely listed in `files`. (Node v22.19.0;
+     `files` is irrelevant to this path anyway, since a git install ships the
+     raw tree rather than an `npm pack`-filtered tarball.)
    - The equivalent plain `npm install "github:JW53222/faultseed#path:adapters/dsh"`
      does **not** work at all, on either npm 9.2.0 or npm 10.9.3: npm parses
      the `#path:` syntax (confirmed via `npm-package-arg`, which does set
