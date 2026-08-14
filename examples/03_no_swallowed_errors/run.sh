@@ -2,7 +2,11 @@
 # no_swallowed_errors.py -- blocks a Write/Edit that introduces a bare
 # `except ...: pass` (or `...`) with no `# swallow-ok: <reason>` marker.
 # ENGINE-QUALITY hook: only fires inside the directories listed in
-# docs/audit/audit-scope.yaml's engine_dirs. See example 10 for what
+# engine_dirs. Runs against the demo engine_dirs config ../lib/common.sh
+# builds (engine_dirs: ["src"]), standing in for an already-configured
+# repo -- not this repo's own shipped docs/audit/audit-scope.yaml, which
+# ships unconfigured on purpose (see example 10 and
+# .claude/hooks/test_engine_dirs_sentinel.py). See example 10 for what
 # happens to the exact same violation OUTSIDE that scope.
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

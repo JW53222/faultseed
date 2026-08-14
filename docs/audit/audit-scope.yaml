@@ -32,34 +32,34 @@
 #      role-independent: wrong path here means zero coverage there, not
 #      reduced risk there.
 #
-# EDIT THIS: "src" is a placeholder, not a scan of your layout. Replace it
-# with the actual top-level directories that hold your hand-written source
-# (e.g. `backend`, `app`, `lib` -- whatever sits at the repo root). List
-# every one; `engine_dirs` is a flat list of first-path-segment strings, not
-# a glob.
+# EDIT THIS: the value below is NOT a scan of your layout -- it is the
+# literal, unmistakable sentinel `UNCONFIGURED_ENGINE_DIRS_SENTINEL`
+# (`_common.py`'s `_load_engine_dirs()`: `"__SET_ME_TO_YOUR_SOURCE_DIRS__"`).
+# Replace it with the actual top-level directories that hold your
+# hand-written source (e.g. `["backend", "app", "lib"]` -- whatever sits at
+# the repo root). List every one; `engine_dirs` is a flat list of
+# first-path-segment strings, not a glob.
 #
-# A CONCRETE-LOOKING placeholder like "src" has a real cost if you forget to
-# edit it: a repo that genuinely has no `src/` gets SILENT zero coverage
-# from no_swallowed_errors.py and no_type_checking_stub.py -- is_engine_path()
-# just returns False for everything, no error, no warning -- rather than the
-# loud block() an absent/malformed audit-scope.yaml already gets. _common.py
-# also recognizes one literal, unmistakable sentinel value,
-# `UNCONFIGURED_ENGINE_DIRS_SENTINEL = "__SET_ME_TO_YOUR_SOURCE_DIRS__"`
-# (_common.py's `_load_engine_dirs()`): if `engine_dirs` is EXACTLY
-# `["__SET_ME_TO_YOUR_SOURCE_DIRS__"]`, it is treated as "template not yet
-# edited" and blocks loudly, by name, instead of silently checking nothing.
-# This repo's OWN shipped value below is intentionally the concrete "src"
-# placeholder, not that sentinel -- this repo's own test suite
+# WHY THE SHIPPED DEFAULT IS THE SENTINEL, NOT A CONCRETE GUESS LIKE "src":
+# a concrete-looking placeholder has a real cost if you forget to edit it --
+# a repo that genuinely has no `src/` would get SILENT zero coverage from
+# no_swallowed_errors.py and no_type_checking_stub.py (is_engine_path() just
+# returns False for everything, no error, no warning) instead of the loud
+# block() an absent/malformed audit-scope.yaml already gets. That asymmetry
+# would make the shipped template worse than no file at all (independent
+# oppositional review, finding M5). `_load_engine_dirs()` therefore treats
+# `engine_dirs` being EXACTLY `[UNCONFIGURED_ENGINE_DIRS_SENTINEL]` as
+# "template not yet edited" and raises `AuditScopeLoadError`, which
+# `is_engine_path()` turns into the SAME loud block() an absent file gets --
+# by name, on every edit -- until you replace it with a real value. Proven
+# in isolation by `test_engine_dirs_sentinel.py`; this repo's own test suite
 # (test_no_swallowed_errors.py, test_no_type_checking_stub.py) and examples
-# (examples/03, examples/10) assert against a real `src/`-scoped config read
-# directly from this file, so switching the shipped value to the sentinel
-# would need those updated in the same change (out of scope here; see
-# test_engine_dirs_sentinel.py for the mechanism proven in isolation via its
-# own synthetic config). If you maintain a FORK or downstream template of
-# this pack, shipping the sentinel as the default here is exactly the fix
-# M5 in the independent oppositional review recommends.
+# (examples/03, examples/10) do NOT read this file directly -- they each
+# build their own synthetic `engine_dirs: ["src"]` config under a throwaway
+# tmp_path/fixture, specifically so this file is free to ship the sentinel
+# without breaking them.
 engine_dirs:
-  - "src"
+  - "__SET_ME_TO_YOUR_SOURCE_DIRS__"
 
 # generated_paths -- OPTIONAL, unlike engine_dirs above. Path PREFIXES
 # (matched with a plain `rel.startswith(prefix)` in `is_generated_path()`,

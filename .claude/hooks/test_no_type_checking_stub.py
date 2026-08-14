@@ -18,15 +18,26 @@ SCOPE GOTCHA (see test_no_swallowed_errors.py's module docstring for the
 full derivation -- same mechanism, repeated briefly here)
 ------------------------------------------------------------------------
 This hook is ENGINE-SCOPED: `is_engine_path(path)` gates on `engine_dirs`
-from THIS REPO'S OWN docs/audit/audit-scope.yaml (currently `["src"]`),
-resolved relative to `_common.py`'s own on-disk location -- NOT
-CLAUDE_PROJECT_DIR. So "in scope" always means "first path segment is
-'src'" for this checkout, regardless of what CLAUDE_PROJECT_DIR a test
-sets. Every in-scope fixture below uses `src/...`; every out-of-scope one
-uses a different top segment (`other/...`); `test_engine_scope_gate_both_directions`
-pins the pairing explicitly -- a silently-wrong `engine_dirs` would disable
-this (and no_swallowed_errors.py) across a user's ENTIRE codebase without
-any test here noticing.
+from docs/audit/audit-scope.yaml, resolved relative to `_common.py`'s own
+on-disk location -- NOT CLAUDE_PROJECT_DIR.
+
+This suite does NOT depend on THIS REPO'S OWN shipped
+docs/audit/audit-scope.yaml -- that file ships
+`engine_dirs: [UNCONFIGURED_ENGINE_DIRS_SENTINEL]` and BLOCKS everything
+until a user sets a real value (see that file's own header comment and
+_common.py's UNCONFIGURED_ENGINE_DIRS_SENTINEL), so a test suite reading it
+directly would break the moment that default is left unconfigured, exactly
+as designed. Instead every fixture below runs a throwaway COPY of
+`_common.py` + `no_type_checking_stub.py` under `tmp_path/.claude/hooks/`,
+alongside a synthetic `tmp_path`'s docs/audit/audit-scope.yaml pinning
+`engine_dirs: ["src"]` -- see `_copied_hook()`. "in scope" therefore always
+means "first path segment is 'src'" for every test in this file, regardless
+of what the real shipped audit-scope.yaml says. Every in-scope fixture
+below uses `src/...`; every out-of-scope one uses a different top segment
+(`other/...`); `test_engine_scope_gate_both_directions` pins the pairing
+explicitly -- a silently-wrong `engine_dirs` would disable this (and
+no_swallowed_errors.py) across a user's ENTIRE codebase without any test
+here noticing.
 
 CLAUDE_PROJECT_DIR is still set to a throwaway tmp_path per invocation so
 `_common.emit_event`'s telemetry append doesn't pollute the real repo's
@@ -36,8 +47,31 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
-HOOK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "no_type_checking_stub.py")
+REAL_HOOKS_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _copied_hook(tmp_path):
+    """Copy `_common.py` + `no_type_checking_stub.py` into
+    `tmp_path/.claude/hooks/` alongside a synthetic
+    `tmp_path`'s docs/audit/audit-scope.yaml pinning `engine_dirs: ["src"]` --
+    decouples this suite from whatever THIS REPO'S OWN
+    docs/audit/audit-scope.yaml happens to ship (see the module docstring's
+    SCOPE GOTCHA). Same technique test_no_swallowed_errors.py's
+    `_copied_hook` and test_engine_dirs_sentinel.py use. Idempotent per
+    tmp_path."""
+    hooks_dir = tmp_path / ".claude" / "hooks"
+    if not hooks_dir.exists():
+        hooks_dir.mkdir(parents=True)
+        for name in ("_common.py", "no_type_checking_stub.py"):
+            (hooks_dir / name).write_text(
+                (Path(REAL_HOOKS_DIR) / name).read_text(encoding="utf-8"), encoding="utf-8"
+            )
+        scope_dir = tmp_path / "docs" / "audit"
+        scope_dir.mkdir(parents=True)
+        (scope_dir / "audit-scope.yaml").write_text('engine_dirs:\n  - "src"\n', encoding="utf-8")
+    return hooks_dir / "no_type_checking_stub.py"
 
 
 def _run(tmp_path, rel_path, content):
@@ -48,7 +82,7 @@ def _run(tmp_path, rel_path, content):
         "tool_input": {"file_path": rel_path, "content": content},
     })
     return subprocess.run(
-        [sys.executable, HOOK], input=ev, text=True, capture_output=True,
+        [sys.executable, str(_copied_hook(tmp_path))], input=ev, text=True, capture_output=True,
         cwd=str(tmp_path), env=env,
     )
 

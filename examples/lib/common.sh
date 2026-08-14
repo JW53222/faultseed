@@ -10,7 +10,6 @@
 # docstring.
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-HOOKS_DIR="$REPO_ROOT/.claude/hooks"
 PY="${PYTHON:-python3}"
 
 CHECKS_RUN=0
@@ -20,28 +19,54 @@ section() {
   echo "--- $* ---"
 }
 
-# Which top-level directory is currently "in scope" for the engine-quality
-# guards (no_swallowed_errors.py / no_type_checking_stub.py), and a
-# directory guaranteed NOT to be, read live from docs/audit/audit-scope.yaml
-# rather than hardcoded -- that file is real repo configuration another
-# session can edit, and a hardcoded "src" here would silently go stale if
-# it does. See example 10 for why this distinction is the whole point.
-read -r ENGINE_IN_SCOPE_DIR ENGINE_OUT_OF_SCOPE_DIR < <("$PY" - "$REPO_ROOT/docs/audit/audit-scope.yaml" <<'PYEOF'
-import sys
-import yaml
+# --- Synthetic hooks tree ---------------------------------------------
+# $HOOKS_DIR does NOT point at this repo's real, installed .claude/hooks/.
+# It points at a throwaway COPY, built fresh below, so every example runs
+# against a KNOWN, fixed engine_dirs value instead of whatever this repo's
+# own docs/audit/audit-scope.yaml happens to ship right now.
+#
+# Why this is necessary, not just tidy: that shipped file's `engine_dirs`
+# is UNCONFIGURED_ENGINE_DIRS_SENTINEL by design (see its own header
+# comment and _common.py's UNCONFIGURED_ENGINE_DIRS_SENTINEL) -- a fresh
+# install BLOCKS every edit until a real value replaces it. `_AUDIT_SCOPE_ROOT`
+# (_common.py) resolves relative to wherever the hook .py FILE physically
+# lives on disk, not CLAUDE_PROJECT_DIR, so no per-example CLAUDE_PROJECT_DIR
+# override can point a REAL, in-place hook at a different config -- the
+# only way to give these examples a working, demonstrable engine_dirs is to
+# run a COPY of the hooks from somewhere that carries its own config. Same
+# technique .claude/hooks/test_engine_dirs_sentinel.py and
+# test_no_swallowed_errors.py's `_copied_hook` use for the identical reason.
+#
+# ALL 11 examples share this one copy (not just the two engine-quality
+# ones) so that examples which don't care about engine_dirs at all still
+# run the exact same, unmodified guard code as a real install -- only the
+# copy's docs/audit/audit-scope.yaml differs from this repo's real one.
+# Every file below is the actual guard/library file this repo ships;
+# nothing here is rewritten or mocked.
+SYNTH_HOOKS_ROOT="${TMPDIR:-/tmp}/faultseed-examples-synth-hooks"
+rm -rf "$SYNTH_HOOKS_ROOT"
+mkdir -p "$SYNTH_HOOKS_ROOT/.claude/hooks" "$SYNTH_HOOKS_ROOT/docs/audit"
+for _hook_file in _common.py agent_sizing_gate.py no_bash_test_deletion.py \
+    no_bash_test_mutation.py no_swallowed_errors.py no_test_tampering.py \
+    no_type_checking_stub.py protect-files.sh subagent_closing_report.py \
+    workflow_agent_sizing_gate.py; do
+  cp "$REPO_ROOT/.claude/hooks/$_hook_file" "$SYNTH_HOOKS_ROOT/.claude/hooks/$_hook_file"
+done
+unset _hook_file
+cat > "$SYNTH_HOOKS_ROOT/docs/audit/audit-scope.yaml" <<'YAML'
+engine_dirs:
+  - "src"
+YAML
+HOOKS_DIR="$SYNTH_HOOKS_ROOT/.claude/hooks"
 
-data = yaml.safe_load(open(sys.argv[1], encoding="utf-8")) or {}
-engine_dirs = set(data.get("engine_dirs") or [])
-in_scope = sorted(engine_dirs)[0] if engine_dirs else "src"
-for candidate in ("docs", "notes", "scratch", "outside_scope_demo"):
-    if candidate not in engine_dirs:
-        out_scope = candidate
-        break
-else:
-    out_scope = "outside_scope_demo_zzz"
-print(in_scope, out_scope)
-PYEOF
-)
+# Which top-level directory is "in scope" for the engine-quality guards
+# (no_swallowed_errors.py / no_type_checking_stub.py) under the synthetic
+# config just written above, and a directory guaranteed NOT to be. Fixed
+# values, not read live from any file, because we just wrote that file
+# ourselves a few lines up -- see example 10 for why this in-scope/
+# out-of-scope distinction is the whole point.
+ENGINE_IN_SCOPE_DIR="src"
+ENGINE_OUT_OF_SCOPE_DIR="docs"
 
 # run_hook HOOK_PATH JSON_STDIN [ENV_ASSIGN...]
 # Runs the real hook with JSON on stdin exactly as Claude Code's hook

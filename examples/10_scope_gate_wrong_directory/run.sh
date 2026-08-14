@@ -8,10 +8,20 @@
 # wrong." A missing/malformed audit-scope.yaml blocks loudly (exit 2,
 # every edit); a WRONG list in it just goes quiet forever.
 #
-# Same violating content, run twice: once under the currently-configured
-# in-scope directory (blocked, exactly like example 03), once under a
-# directory that is guaranteed not to be in engine_dirs (allowed -- not
-# because the code is fine, but because nothing looked).
+# This is the AFTER-you-configured-it footgun, not the fresh-install one:
+# the shipped docs/audit/audit-scope.yaml ships UNCONFIGURED_ENGINE_DIRS_SENTINEL
+# and blocks loudly, by name, until you set a real value -- see _common.py's
+# UNCONFIGURED_ENGINE_DIRS_SENTINEL and .claude/hooks/test_engine_dirs_sentinel.py.
+# This example instead demonstrates what happens the moment AFTER you've
+# set a real value, if that value doesn't match where your source actually
+# lives -- run against a demo config (engine_dirs: ["src"], see
+# ../lib/common.sh) standing in for "a user's already-configured repo",
+# not this repo's own real one.
+#
+# Same violating content, run twice: once under that demo config's in-scope
+# directory (blocked, exactly like example 03), once under a directory that
+# is guaranteed not to be in engine_dirs (allowed -- not because the code is
+# fine, but because nothing looked).
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$DIR/../lib/common.sh"
@@ -21,7 +31,7 @@ trap 'rm -rf "$FIXTURE"' EXIT
 
 VIOLATING_CONTENT=$'def foo():\n    try:\n        risky()\n    except Exception:\n        pass\n'
 
-echo "Currently configured engine_dirs (docs/audit/audit-scope.yaml): includes '$ENGINE_IN_SCOPE_DIR'"
+echo "Demo engine_dirs for this example (see ../lib/common.sh): includes '$ENGINE_IN_SCOPE_DIR'"
 echo "Directory used for the out-of-scope half below: '$ENGINE_OUT_OF_SCOPE_DIR' (confirmed NOT in engine_dirs)"
 
 section "in scope: $ENGINE_IN_SCOPE_DIR/foo.py, same swallow bug as example 03"

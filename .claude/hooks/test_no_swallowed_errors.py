@@ -13,15 +13,32 @@ SCOPE GOTCHA (read before extending this file)
 ------------------------------------------------
 no_swallowed_errors.py is ENGINE-SCOPED for Python: it calls
 `is_engine_path(path)` and allow()s immediately for anything outside
-`engine_dirs`. That list is loaded from THIS REPO'S OWN
-docs/audit/audit-scope.yaml (currently the placeholder `["src"]`) --
+`engine_dirs`. That list is loaded from docs/audit/audit-scope.yaml,
 resolved relative to `_common.py`'s own on-disk location
-(`_AUDIT_SCOPE_ROOT`), NOT `CLAUDE_PROJECT_DIR`. So no matter what
-CLAUDE_PROJECT_DIR a test sets, "in scope" always means "first path segment
-is 'src'" for this checkout. Every fixture below uses `src/...` for
-in-scope cases and a different top segment (`other/...`) for out-of-scope
-cases -- and `test_engine_scope_gate_both_directions` pins the pairing
-explicitly, because a silently-wrong `engine_dirs` would disable this (and
+(`_AUDIT_SCOPE_ROOT`), NOT `CLAUDE_PROJECT_DIR`.
+
+This suite does NOT depend on THIS REPO'S OWN shipped
+docs/audit/audit-scope.yaml. That file is user-facing config -- a fresh
+clone's own copy ships `engine_dirs: [UNCONFIGURED_ENGINE_DIRS_SENTINEL]`
+(see that file's own header comment and _common.py's
+UNCONFIGURED_ENGINE_DIRS_SENTINEL) and BLOCKS everything until a real
+value replaces it, so a test suite that read the shipped file directly
+would either need constant re-syncing or would break the moment the
+default is (correctly) left unconfigured. Instead every fixture below runs
+a throwaway COPY of `_common.py` + `no_swallowed_errors.py` under
+`tmp_path/.claude/hooks/`, alongside a synthetic
+`tmp_path`'s docs/audit/audit-scope.yaml pinning `engine_dirs: ["src"]` --
+see `_copied_hook()`. Because `_AUDIT_SCOPE_ROOT` resolves relative to the
+hook's own on-disk `__file__`, running the copy from under tmp_path makes
+it read the copy's synthetic config, not this repo's real one -- the same
+technique `test_engine_dirs_sentinel.py` and
+`test_generated_paths_exemption_actually_reaches_the_hook` (below) already
+use. "in scope" therefore always means "first path segment is 'src'" for
+every test in this file, regardless of what the real shipped
+audit-scope.yaml says. Every fixture below uses `src/...` for in-scope
+cases and a different top segment (`other/...`) for out-of-scope cases --
+and `test_engine_scope_gate_both_directions` pins the pairing explicitly,
+because a silently-wrong `engine_dirs` would disable this (and
 no_type_checking_stub.py) across a user's ENTIRE codebase without any test
 here noticing.
 
@@ -37,7 +54,29 @@ import subprocess
 import sys
 from pathlib import Path
 
-HOOK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "no_swallowed_errors.py")
+REAL_HOOKS_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _copied_hook(tmp_path):
+    """Copy `_common.py` + `no_swallowed_errors.py` into
+    `tmp_path/.claude/hooks/` alongside a synthetic
+    `tmp_path`'s docs/audit/audit-scope.yaml pinning `engine_dirs: ["src"]` --
+    decouples this suite from whatever THIS REPO'S OWN
+    docs/audit/audit-scope.yaml happens to ship (see the module docstring's
+    SCOPE GOTCHA). Idempotent per tmp_path: a test that calls this more than
+    once (e.g. both an in-scope and out-of-scope case) reuses the same copy
+    instead of re-writing it."""
+    hooks_dir = tmp_path / ".claude" / "hooks"
+    if not hooks_dir.exists():
+        hooks_dir.mkdir(parents=True)
+        for name in ("_common.py", "no_swallowed_errors.py"):
+            (hooks_dir / name).write_text(
+                (Path(REAL_HOOKS_DIR) / name).read_text(encoding="utf-8"), encoding="utf-8"
+            )
+        scope_dir = tmp_path / "docs" / "audit"
+        scope_dir.mkdir(parents=True)
+        (scope_dir / "audit-scope.yaml").write_text('engine_dirs:\n  - "src"\n', encoding="utf-8")
+    return hooks_dir / "no_swallowed_errors.py"
 
 
 def _env(tmp_path, **extra):
@@ -53,19 +92,19 @@ def _env(tmp_path, **extra):
 def _run_write(tmp_path, rel_path, content, hook_path=None, **env_extra):
     """Write event -- content is the whole post-edit file, no disk read needed.
 
-    `hook_path` defaults to this repo's real HOOK (every existing caller's
-    behavior, unchanged); a caller may pass a different on-disk copy of the
-    hook instead -- see test_generated_paths_exemption_actually_reaches_the_hook,
-    which needs to run a COPY of the hook from inside tmp_path so its
-    _AUDIT_SCOPE_ROOT-relative audit-scope.yaml lookup resolves to a
-    synthetic, tmp_path-local config instead of this repo's real one."""
+    `hook_path` defaults to a per-tmp_path COPY of the hook (see
+    `_copied_hook`) so the scope decision is pinned to a synthetic
+    `engine_dirs: ["src"]`, independent of this repo's real shipped
+    audit-scope.yaml; a caller may pass a different on-disk copy instead --
+    see test_generated_paths_exemption_actually_reaches_the_hook, which
+    builds its own copy with an additional `generated_paths` section."""
     ev = json.dumps({
         "tool_name": "Write",
         "tool_input": {"file_path": rel_path, "content": content},
     })
     return subprocess.run(
-        [sys.executable, hook_path or HOOK], input=ev, text=True, capture_output=True,
-        cwd=str(tmp_path), env=_env(tmp_path, **env_extra),
+        [sys.executable, hook_path or str(_copied_hook(tmp_path))], input=ev, text=True,
+        capture_output=True, cwd=str(tmp_path), env=_env(tmp_path, **env_extra),
     )
 
 
@@ -82,7 +121,7 @@ def _run_edit(tmp_path, rel_path, old_string, new_string, **env_extra):
         },
     })
     return subprocess.run(
-        [sys.executable, HOOK], input=ev, text=True, capture_output=True,
+        [sys.executable, str(_copied_hook(tmp_path))], input=ev, text=True, capture_output=True,
         cwd=str(tmp_path), env=_env(tmp_path, **env_extra),
     )
 
