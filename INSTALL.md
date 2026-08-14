@@ -613,6 +613,111 @@ alone isn't enough. This pack gives you the enforcement mechanism for a run
 that reaches its own end; it does not give you a way to distinguish a clean
 finish from a truncation, and you should not assume it does.
 
+## Updating
+
+There is no merge step. Updating is: re-copy the pack's own files from a
+newer checkout, regenerate `settings.json`, and prove the wiring still
+works — the same three moves as Quickstart steps 1, 3, and 4, run again
+against newer content. Nothing here diffs your tree against the new one and
+folds in only what changed; it overwrites the pack's files outright.
+
+**1. Get the newer content as a `git archive` extraction of a tag or `main`
+— not a live checkout with local edits mixed in**, for the same reason
+RELEASING.md gives for publishing from an extraction: a working tree can
+carry state (scratch files, an in-progress edit) that isn't actually part
+of the release you mean to install.
+
+**2. Re-copy the pack's own files — with a trailing `/.` on the source,
+not Quickstart step 1's bare form.** This is the one place updating is NOT
+"run step 1 again": step 1's `cp -r <src>/.claude/hooks <dst>/.claude/hooks`
+is correct for a *fresh* install, where `<dst>/.claude/hooks` doesn't exist
+yet. On an update it already exists, and `cp -r` onto an existing directory
+copies the source directory *inside* it instead of overwriting its
+contents — you silently end up with `.claude/hooks/hooks/`, the stale
+top-level files untouched underneath, and every generated hook command
+still pointing at the old, unfixed versions. This was caught, not assumed:
+the drifted-repo receipt this section was written against hit exactly this
+nesting the first time it ran the update, on this exact command shape.
+Use the source's contents, not the source directory itself:
+
+```
+cp -r <newer-checkout>/.claude/hooks/.   <your-repo>/.claude/hooks/
+cp -r <newer-checkout>/.claude/rules/.   <your-repo>/.claude/rules/
+cp    <newer-checkout>/docs/hook-manifest.yaml   <your-repo>/docs/hook-manifest.yaml
+```
+
+A bare `rm -rf <your-repo>/.claude/hooks` before the copy would dodge the
+nesting bug too, but don't do that either — it deletes anything you added
+of your own alongside the pack's files in that same directory (a local
+notes file, a repo-specific wrapper script), which an update must not
+touch. The trailing-`/.` form above overwrites every file the pack ships
+with the newer version and adds any new ones, without deleting anything
+that isn't the pack's own. If you hand-patched a hook file yourself — not
+an escape marker (those live in the files you edit, not the pack) but an
+actual local change to a hook's own logic — that change is gone after this
+step; there is no merge, only an overwrite of the pack's own filenames.
+
+**3. Do NOT re-copy `docs/audit/audit-scope.yaml`.** Unlike the files in
+step 2, this is *your* config, not pack content — it holds the
+`engine_dirs`/`generated_paths` you edited in Quickstart §2. Re-copying it
+from the newer checkout resets `engine_dirs` back to the shipped sentinel
+and silently zeroes out coverage from `no_swallowed_errors.py` and
+`no_type_checking_stub.py` again (§2 above explains why that's silent, not
+loud). Only copy this file on a fresh install, or if you deliberately want
+to reset your scope.
+
+**4. Regenerate `.claude/settings.json`** — Quickstart step 3's exact
+command, run again:
+
+```
+python3 .claude/hooks/generate_settings_json.py \
+    --manifest docs/hook-manifest.yaml --target python_default \
+    --out .claude/settings.json
+```
+
+This is a pure function of `docs/hook-manifest.yaml` plus your `--target` —
+it does not read, merge with, or preserve whatever `settings.json`
+currently contains. Re-running it after step 2 is what actually picks up
+the newer hook wiring; skipping it leaves the newer files on disk but the
+old `settings.json` still pointing Claude Code at last version's wiring
+(the two are not the same thing — see the generator's own note under "The
+generator's dimensions, honestly" above).
+
+**5. `.claude/settings.local.json` is untouched by all of the above** — it
+is not in step 2's copy list and `generate_settings_json.py` never opens
+it (Claude Code layers it over the generated `settings.json` at read time;
+the generator has no `--target` or flag that reads or writes it). Whatever
+local overrides you keep there survive an update by construction, not
+because this procedure does anything to protect them.
+
+**6. PROVE IT** — repeat Quickstart step 4's block/allow pair after
+updating:
+
+```
+$ echo '{"tool_name":"Write","tool_input":{"file_path":".env","content":"SECRET=1"}}' | \
+    python3 .claude/hooks/_dispatch.py protect-files.sh
+Blocked: .env matches protected pattern '.env'
+exit=2
+```
+
+If this still blocks the real violation, the update didn't silently break
+wiring. This is a completion check, not a formality — a `cp -r` step
+failing partway (permissions, a stray `--dry-run`, a typo'd source path)
+leaves stale files in place with no other signal.
+
+**What survives an update, and what doesn't:**
+
+| Survives (yours) | Does NOT survive (pack's — overwritten) |
+|---|---|
+| `docs/audit/audit-scope.yaml` (your `engine_dirs`/`generated_paths`) | `.claude/hooks/*.py`, `.claude/hooks/*.sh` |
+| `.claude/settings.local.json` | `.claude/rules/honesty-guardrails.md` |
+| Any file or commit you added yourself, anywhere under `.claude/` or elsewhere, that isn't one of the pack's own files | `docs/hook-manifest.yaml` |
+| | `.claude/settings.json` (regenerated fresh in step 4, not merged) |
+
+This gate — a real drifted install of one version updated to a newer one,
+with a receipt — is required before any second release ships; see
+RELEASING.md's "Update-path gate."
+
 ## Uninstalling
 
 Every control here is a file plus a manifest entry. To remove one guard:

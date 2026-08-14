@@ -25,6 +25,69 @@ above is now strong enough that the boundary matters in the same breath:
   tool's registered name," which is what was in question; it does not
   confirm the real tool-bash plugin's own registration path end to end.
 
+## What this is
+
+A dsh **bundle** — an npm package that mounts
+[faultseed](https://github.com/JW53222/faultseed)'s honesty-guardrail hooks
+through `@deepseek-ai/dsh-hooks-claude-code`, dsh's own real bridge for
+running unmodified Claude Code hook configs. No dsh-side guard logic lives
+in this package: every decision is still made by faultseed's own Python,
+run through `_dispatch.py` exactly as it runs under Claude Code today —
+deterministic checks that block a coding agent from weakening a test,
+swallowing an error, or deleting a test through the shell, each backed by
+a planted-failure test proving it can fail. Deterministic engineering-risk
+guards, not a statistical claim about defect rates — see the [main
+repo](https://github.com/JW53222/faultseed) for the full doctrine and all
+nine guards this pack wires.
+
+## Install
+
+**Once published, from npm:**
+
+```
+dsh plugin --profile <your-profile> add @jw53222/faultseed-dsh
+```
+
+**Straight from GitHub (works today, no npm account or publish needed):**
+
+```
+dsh plugin --profile <your-profile> add "github:JW53222/faultseed#path:adapters/dsh"
+```
+
+Either way, you still need to point `HOOKS_HARNESS_ROOT` at your faultseed
+checkout and drop a `harness.env` file in your target project before a
+hook actually fires — see "Install — full wiring detail" under the fold
+below for the complete four-step sequence (`pluginRoot`, `harness.env`,
+`CLAUDE_PROJECT_DIR`) a new install needs before the first guard runs.
+
+## Verify it blocks — one command, no dsh session needed
+
+```
+$ sh bin/smoke-test.sh
+```
+
+Runs the real `_dispatch.py` against a real deny case and a real allow
+case with no dsh process involved at all — the fastest way to confirm the
+pack you installed is actually wired before trusting it inside an agent
+loop.
+
+## Links
+
+- Main repo & doctrine: <https://github.com/JW53222/faultseed>
+- What this pack found wrong in its own first 24 hours: [docs/lessons.md](../../docs/lessons.md)
+- Model-agnostic agent behavioral contract: [AGENTS.md](../../AGENTS.md)
+- Full build record for this adapter — every file:line relied on, verified vs. assumed: [NOTES.md](NOTES.md)
+
+---
+
+## Deep technical detail
+
+Everything below is the full verification record for this adapter: what
+was run versus merely read, the install narrative with real captured
+command output, the exit-code contract this depends on, the known gaps,
+and the npm-publish staging process. The sections above are the 30-second
+version; this is the whole claim, with receipts.
+
 This package is a dsh **bundle** (per `docs/user/develop/basic/publish.md` in
 the deepseek-harness tree: an npm package whose `package.json` declares a
 `dsh.bundle` key). It mounts `@deepseek-ai/dsh-hooks-claude-code` — dsh's own,
@@ -153,7 +216,7 @@ remains unjoined is specifically the part that needs a live model: a real
 own. Read the label above precisely — "verified through the real bridge,"
 not "verified under a live agent."
 
-## Install
+## Install — full wiring detail and verification narrative
 
 1. **Clone or link this package** into your dsh profile, per
    `docs/user/develop/basic/publish.md`:

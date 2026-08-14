@@ -6,8 +6,27 @@ repo; when a release changes `adapters/dsh/`, a matching npm publish of
 sync contract). Between tags, `main` moves — install from a tag or from npm
 if you want a fixed version; install from `main` if you want the tip.
 
-## Unreleased (on `main` since v0.1.0)
+## v0.1.1 — 2026-08-14
 
+- **Update-path gate closed** (RELEASING.md step 2, previously unreceipted):
+  a fresh v0.1.0 install, deliberately drifted (customized `engine_dirs`,
+  a local file added next to the hooks pack, a `settings.local.json`
+  override, and — as a positive control — a hand-corrupted pack file),
+  updated cleanly to current `main`'s content. `INSTALL.md` gained an
+  "Updating" section (previously absent — a pack that can only be
+  installed once, not updated, was the actual gap this gate exists to
+  catch); receipt at
+  `docs/receipts/update-path-v0.1-receipt.md`.
+- `adapters/dsh/`: npm storefront pass. `README.md` restructured so the
+  npm package page reads as a standalone page in 30 seconds — what this
+  is, both install paths, a one-command verify-it-blocks check, and links
+  to the main repo / `docs/lessons.md` / `AGENTS.md` — with the full
+  verification record (unchanged, including the "VERIFIED THROUGH THE
+  REAL BRIDGE" boundary statement) moved below the fold. `package.json`
+  gained `keywords`, `homepage`, and `bugs`; version bumped to `0.1.1`
+  (the adapter's own content — `cordis.patch.yml`, `hooks.json`, the two
+  `bin/` proof scripts — is unchanged; this is a metadata/packaging-only
+  bump).
 - `scripts/check_escape_markers.py`: diff-scoped CI gate — every escape
   marker added in a change must be acknowledged in an `Escape-Markers:`
   commit trailer; optional LLM adjudication tier behind an API key.
@@ -17,8 +36,6 @@ if you want a fixed version; install from `main` if you want the tip.
   public history.
 - Test-fixture hygiene: one synthetic leak fixture genericized
   (`331d348`).
-- No changes to `adapters/dsh/` — npm `0.1.0` still matches `main`'s
-  adapter content.
 
 ## v0.1.0 — 2026-08-14
 
