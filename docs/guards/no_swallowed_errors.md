@@ -60,8 +60,24 @@ tier matches only the bare `pass`/`...` body shape (see Known limits).
 `# swallow-ok: <reason>` (PowerShell `<# ... #>`, Go `//`). Handler-aware: it
 can sit on the `except` line, the sole `pass`/`...` body line, or a comment
 line between them — any of the three natural places a developer would
-annotate. A bare `# swallow-ok` with nothing after the colon does not clear
-the block (`SWALLOW_OK` requires a non-whitespace captured group).
+annotate. For the brace-delimited Go and PowerShell shapes it may also sit on
+its own line anywhere the matched block spans. A bare `# swallow-ok` with
+nothing after the colon does not clear the block (`SWALLOW_OK` requires a
+non-whitespace captured group).
+
+**A comment that is not a marker clears nothing, in any tier.** That is worth
+saying plainly because it was not true until 2026-08-14. Every hard-block
+pattern in the Go and PowerShell tiers was anchored so that any trailing or
+interior comment stopped it matching at all — so the marker check was never
+reached, and an arbitrary `// whatever` silently cleared the block exactly as
+a well-formed marker would. Five patterns had it: `GO_DISCARD_ERR`,
+`GO_EMPTY_ERR_CHECK`, `GO_SWALLOWED_RETURN_NIL`, `PS_EMPTY_CATCH`,
+`PS_NULL_CATCH`. The Python tier is AST-based and was never affected.
+
+The fix separates what the bug had conflated: the pattern matches the SHAPE,
+treating comments as filler, and the marker check is the only thing that
+clears a hit. If you are reading this against an older checkout, verify
+rather than trust the text — the tests pinning it are named below.
 
 ## Scope
 

@@ -656,6 +656,113 @@ decided unilaterally by whoever produces new evidence. This section is that
 evidence, written down precisely so that decision can be made with full
 information.
 
+**Superseded by the next section, immediately below**: the team lead
+reviewed the above and supplied the label's replacement wording directly,
+explicitly approving the update. The original reasoning in this section is
+left as written (an accurate record of why it was NOT done unilaterally at
+the time); the label itself has since been changed, on instruction — see
+"2026-08-14 second follow-up."
+
+## 2026-08-14 second follow-up: label updated on instruction, install defect fixed
+
+Two items came back from the team lead after reviewing the section above.
+
+### The PARTIAL label
+
+Replaced at the team lead's explicit direction, with wording they supplied
+directly (not decided unilaterally): README.md's headline now reads
+"VERIFIED THROUGH THE REAL BRIDGE," with the still-open items (the
+`DEEPSEEK_API_KEY`-gated CLI e2e, Code Mode, `ctx.shell` env-scrub, and the
+fixture-vs-real-`ToolBash`-plugin gap) listed immediately underneath rather
+than buried in "Known gaps." The "What 'PARTIAL' means here, precisely"
+section was retitled and gained a third numbered item (the bridge-level
+proof, with its verbatim output). The "Known gaps" matcher-translation
+bullet was updated to say `bash` is now resolved by execution while the
+other five tool names (`edit`, `write`, `str_replace_editor`, `subagent`,
+`subagent_fork`, `workflow`) remain read-only. The `PreToolUse`
+control-flow paragraph (merged.decision === 'deny' without calling next())
+was updated the same way — resolved by execution for `PreToolUse`, still
+read-only for the `Stop`/`agent.steer` claim, which the proof never drove.
+
+### GitHub-direct install: actually fixed, not just documented as broken
+
+The team lead's insight: a scope is needed to *publish* to npm, not to
+*install* from git — so the `{{SCOPE}}` defect found in the first follow-up
+did not need to wait on the owner's Sunday scope decision at all. Applied:
+
+- `package.json`'s `name` changed from `"@{{SCOPE}}/faultseed-dsh"` to the
+  plain, valid, unscoped `"faultseed-dsh"`.
+- `bin/prepare-npm-publish.sh` rewritten: it no longer substitutes a
+  `{{SCOPE}}` token. It now requires `name` to be EXACTLY the unscoped
+  literal `faultseed-dsh` before running (refusing otherwise — the
+  idempotency guard), rewrites it to `@<scope>/faultseed-dsh`, and —
+  the team lead's specific flag — **verification now asserts the written
+  `name` equals `@<scope>/faultseed-dsh` EXACTLY**, not merely "no
+  placeholder token remains." The earlier version's placeholder-absence
+  check was exactly the silent-no-op shape this pack exists to catch: a
+  check that could keep passing even if a future edit changed what "applied"
+  looks like without updating what the check looks for. Checking the literal
+  target string closes that gap for real, not just in comment prose.
+
+Re-verified, real commands, real output:
+
+```
+$ pnpm add "../dsh-copy"            # local copy of the now-unscoped package
++ faultseed-dsh 0.1.0 <- ../dsh-copy
+Done in 474ms using pnpm v11.7.0    # clean install, no name error
+
+$ SCOPE=my-real-scope sh bin/prepare-npm-publish.sh
+OK: package.json is publish-ready (name=@my-real-scope/faultseed-dsh, private=false, repository set).
+
+$ SCOPE=my-real-scope sh bin/prepare-npm-publish.sh   # re-run, idempotency guard
+prepare-npm-publish.sh: package.json's "name" is "@my-real-scope/faultseed-dsh", not the expected unscoped "faultseed-dsh" -- already applied ... Not touching it.
+exit: 1
+
+$ SCOPE='bad scope!' sh bin/prepare-npm-publish.sh    # invalid scope, fresh copy
+prepare-npm-publish.sh: SCOPE 'bad scope!' is not a valid npm scope segment ...
+exit: 1
+
+$ rm bin/codec-mapping-proof.mjs && SCOPE=my-real-scope sh bin/prepare-npm-publish.sh   # simulated files/disk drift
+VERIFY FAIL: files array entries missing on disk:
+bin/codec-mapping-proof.mjs
+Restoring package.json from backup -- publish prep NOT applied.
+exit: 1
+# package.json's name/private confirmed unchanged (still faultseed-dsh / true) after this run
+```
+
+Also re-ran `sh bin/smoke-test.sh` and `node bin/codec-mapping-proof.mjs`
+against the real, unmodified `adapters/dsh/` after these edits — both still
+PASS, unaffected (neither reads `package.json`).
+
+**What is NOT yet re-verified**: the actual GitHub-direct `pnpm add
+"github:JW53222/faultseed#path:adapters/dsh"` command against the real
+public repo, because this change hasn't been pushed there — this session
+doesn't run `git commit`/`push`. The local-copy install above exercises the
+identical package.json-read code path pnpm's git fetcher uses once it
+extracts the tarball, so it's a strong proxy, but re-running the literal
+GitHub command once this merges is the one step this session could not
+complete itself.
+
+### Doc-ref gate
+
+`bin/prepare-npm-publish.sh`'s own usage-example lines (citing
+`bin/smoke-test.sh` and its own path) and one new mention of
+`tests/bridge.spec.ts` <!-- doc-ref-ok: path is inside the deepseek-harness clone, not this repo, in the section above this one --> tripped
+`scripts/check_doc_refs.py`'s dangling-reference check, the same known gap
+`bin/smoke-test.sh` already carries `doc-ref-ok:` markers for. Applied the
+same treatment, each with its own reason (not a bare marker — the guardrail
+requires a reason). Confirmed:
+
+```
+$ python3 scripts/check_doc_refs.py
+scanned 84 file(s) (git-tracked + untracked-not-gitignored)
+
+== dangling references (loud -- drives exit code) ==
+0 found
+$ echo $?
+0
+```
+
 ## Closing report (per honesty-guardrails.md)
 
 **Changed outside the literal request:** none. Every file written is under
@@ -685,3 +792,18 @@ proof that does not need DEEPSEEK_API_KEY" above for exactly what is now
 run-verified vs. what remains open. The original bullets are left as written
 above (historical accuracy of what THAT session knew at the time); this note
 exists so a reader of just the closing report doesn't miss the update.
+
+**(2026-08-14 second follow-up note, appended): package.json's `name` field
+was changed** (`"@{{SCOPE}}/faultseed-dsh"` → `"faultseed-dsh"`) — the one
+exception to "wrote nothing outside `adapters/dsh/`, and `package.json`
+untouched" in the closing report above, done on the team lead's explicit
+instruction after they identified that a scope is only needed to *publish*,
+not to *install* (see "2026-08-14 second follow-up" section above). Still
+true: no `git commit`/`push`/`npm publish` was run — the fix is staged in the
+working tree, same as everything else in this file. `private: true` is
+unchanged. Known problems not fixed, as of this note: the live GitHub-direct
+install command has not been re-run against the real public repo (this
+change hasn't been pushed there yet); the `DEEPSEEK_API_KEY`-gated CLI e2e
+is still not run; Code Mode and `ctx.shell` env-scrub remain unverified; the
+real `ToolBash` plugin (vs. the identically-named fixture) still wasn't
+mounted.
