@@ -29,8 +29,13 @@ including the exact escape marker and the test that proves it fires, is
   `no_test_tampering.py`'s Edit/Write coverage. Creating a brand-new test
   file this way is fine. (Enforced: `no_bash_test_mutation.py`, `PreToolUse`
   on `Bash`. Escape: `# test-mutate-ok: <reason>`, reason required. Bypassed
-  entirely when `GUARDRAILS_INTEGRATOR_ROLE` is set — the integrator owns test edits at
-  merge time.)
+  entirely by `GUARDRAILS_INTEGRATOR_ROLE=1` — exactly `"1"`, nothing else;
+  `true`/`yes`/any other value leaves the guard active. That strictness is
+  the rule for this pack: **a variable that DISABLES a control demands the
+  most explicit possible opt-in, while a variable that only enables
+  maintenance can be permissive.** The bypass exists because a merge
+  integrator legitimately edits and moves tests while merging other people's
+  branches.)
 - **NEVER swallow an error to get past it.** No bare `except: pass`/`...`,
   no PowerShell `catch {}` or `-ErrorAction SilentlyContinue`/`Ignore`.
   Handle it, re-raise, or let it propagate. A genuinely correct swallow

@@ -85,6 +85,16 @@ BLOCKED: this edit weakens a test instead of fixing the code under test.
 exit 2   (same edit with `# tampering-ok: <reason>` added instead of a bare `pass`: exit 0)
 ```
 
+The next two guards are **scope-gated**, and the pack ships unconfigured on
+purpose (see [What this does not do](#what-this-does-not-do)). Point them at
+your source once — this is the same step [INSTALL.md](INSTALL.md) §2 requires,
+and until you do it these two block every edit with a config error instead of
+checking anything:
+
+```
+$ sed -i 's/__SET_ME_TO_YOUR_SOURCE_DIRS__/src/' docs/audit/audit-scope.yaml
+```
+
 **`no_swallowed_errors`** — `Write` to `src/foo.py`, a bare `except Exception: pass`
 ```
 $ echo '{"tool_name":"Write","tool_input":{"file_path":"src/foo.py","content":"def foo():\n    try:\n        risky()\n    except Exception:\n        pass\n"}}' | python3 .claude/hooks/no_swallowed_errors.py
@@ -118,7 +128,7 @@ exit 2   (same sed, but a file that does not exist yet under $F: exit 0)
 **`agent_sizing_gate`** — `Agent(model="opus", prompt="do the thing")`
 ```
 $ echo '{"tool_name":"Agent","tool_input":{"model":"opus","prompt":"do the thing","subagent_type":"general-purpose"}}' | python3 .claude/hooks/agent_sizing_gate.py
-BLOCKED: Agent(model:"opus") is a Opus leaf — full Opus rate, no fan-out.
+BLOCKED: Agent(model:"opus") is an Opus leaf — full Opus rate, no fan-out.
 exit 2   (same call with `opus-leaf-ok: <reason>` in the prompt: exit 0)
 ```
 

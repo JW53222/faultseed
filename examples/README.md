@@ -45,6 +45,7 @@ script below prints the observed exit code next to what it means, not just
 | 09 | `09_subagent_closing_report/` | `subagent_closing_report.py` | A subagent transcript missing both required closing-report markers blocked; the identical markerless transcript allowed when `agent_type` is an exempt role (`Explore`) |
 | 10 | `10_scope_gate_wrong_directory/` | scope config, not a guard | The *same* swallowed-error bug from #03, once inside `engine_dirs` (blocked) and once outside it (silently allowed) — the sharpest install footgun in this pack |
 | 11 | `11_missing_dependency/` | `protect-files.sh`, and the class of bug it belongs to | A real, previously-shipped fail-open: with `jq` missing or broken, the *original* guard silently PERMITTED a write to `.env`. Reproduces the old behavior live against a pinned pre-fix copy of the hook, then shows the fixed guard failing closed instead |
+| 12 | `12_readme_examples/` | this repo's `README.md`, not a guard | Parses the nine command/output/exit-code worked examples (plus the one-time `engine_dirs` `sed` step) out of `README.md`'s "Worked examples" section at run time and re-executes every one against a sandboxed copy of the real hooks, asserting the documented exit code and first output line actually happen. Closes the gap that let the doc drift from reality twice, silently, before this existed |
 
 Examples 10 and 11 aren't guard demos in the same sense as 01–09 — they're
 warnings, and they're the same failure class told two ways. Every other
@@ -158,7 +159,7 @@ example: 07_agent_sizing_gate
 
 --- agent_sizing_gate.py -- Agent(model="opus", ...) with no escape sentinel ---
 BLOCKED (exit 2) -- a frontier model spawned as a leaf -- full frontier cost, no fan-out, serializes work a team would parallelize
-  guard said: BLOCKED: Agent(model:"opus") is a Opus leaf — full Opus rate,
+  guard said: BLOCKED: Agent(model:"opus") is an Opus leaf — full Opus rate, no fan-out.
 
 --- agent_sizing_gate.py -- the near-miss: a bounded, justified frontier leaf ---
 ALLOWED (exit 0) -- same model, but the prompt carries 'opus-leaf-ok: <reason>' -- a deliberate, narrow exception, not silence

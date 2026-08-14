@@ -27,7 +27,7 @@ fan out.
 ```
 $ echo '{"tool_name":"Agent","tool_input":{"prompt":"do the thing","subagent_type":"general-purpose","model":"opus"}}' \
   | python3 agent_sizing_gate.py
-BLOCKED: Agent(model:"opus") is a Opus leaf — full Opus rate,
+BLOCKED: Agent(model:"opus") is an Opus leaf — full Opus rate, no fan-out.
 no fan-out. ...
 $ echo $?
 2

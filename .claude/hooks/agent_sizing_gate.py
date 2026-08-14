@@ -72,8 +72,18 @@ edits that would otherwise collide)."""
 
 def _frontier_leaf_msg(model):
     title = model.title()
-    return f"""BLOCKED: Agent(model:"{model}") is a {title} leaf — full {title} rate,
-no fan-out. The Agent tool only makes leaves; a frontier leaf reads code a
+    # "an Opus" / "a Sonnet" -- computed, not hardcoded, because the tier set
+    # is user-editable (MODEL_TIERS in _common.py). A wrong article in a block
+    # message is the kind of small wrongness that makes a reader trust the
+    # rest of the message less.
+    article = "an" if title[0].upper() in "AEIOU" else "a"
+    # Keep the FIRST physical line a complete clause. It is the line quoted by
+    # README.md's worked example, docs/guards/agent_sizing_gate.md and
+    # examples/README.md, and examples/12 now asserts those quotes against a
+    # real run. Breaking mid-clause read badly in a terminal AND made those
+    # three documents disagree with each other about what this hook prints.
+    return f"""BLOCKED: Agent(model:"{model}") is {article} {title} leaf — full {title} rate, no fan-out.
+The Agent tool only makes leaves; a frontier leaf reads code a
 Sonnet could and can't spawn its own subagents, so it serializes work a team
 would parallelize.
 
