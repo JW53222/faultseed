@@ -217,7 +217,7 @@ def test_home_path_in_commit_body_is_caught(tmp_path):
     # check_doc_refs.py's identical tail-char class; that's a report-
     # cosmetics nuance, not a missed detection, so it isn't pinned here).
     root = _init_repo(tmp_path)
-    leaky_path = _synthetic_home_path(user="jward", tail="TradeSite-unified/secrets.env")
+    leaky_path = _synthetic_home_path(user="jdoe", tail="acme-project/secrets.env")
     commit = _commit(root, message="fix build script", body=f"broke on `{leaky_path}`, patched")
     result = ccm.scan(root)
     assert result.exit_code == ccm.EXIT_FOUND
