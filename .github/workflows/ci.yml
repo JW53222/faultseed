@@ -49,3 +49,44 @@ jobs:
 
       - name: Run the full suite
         run: ./run_tests.sh
+
+  # scripts/check_escape_markers.py audits every escape marker ADDED in a
+  # pull request's diff (see that script's own module docstring for the
+  # full doctrine) -- a reasoned marker that isn't named in an
+  # Escape-Markers: commit trailer, or any bare marker, fails this job. No
+  # continue-on-error, same rule as the `test` job above: a gate that
+  # cannot fail is the defect this repo exists to make loud.
+  #
+  # PULL REQUESTS have a real base to diff against
+  # (github.event.pull_request.base.sha) and are BLOCKING. A push event
+  # (e.g. a direct push to main, or the push half of a PR's own
+  # synchronize) has no PR base ref at all -- this job NO-OPS LOUDLY for
+  # that case (a named, visible step that explains why nothing ran)
+  # instead of either fabricating a base ref that doesn't mean what a PR
+  # diff means, or silently skipping without a trace in the job list.
+  escape-markers:
+    name: check_escape_markers.py
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history, not a shallow clone: the gate needs to diff
+          # against the PR's base sha and walk every commit in between for
+          # Escape-Markers: trailers -- a shallow checkout can leave that
+          # base sha unreachable.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Audit escape markers added in this pull request
+        if: github.event_name == 'pull_request'
+        run: python3 scripts/check_escape_markers.py --base-ref "${{ github.event.pull_request.base.sha }}"
+
+      - name: No PR base to diff against on a push event -- no-op, loudly
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "check_escape_markers.py: event '${{ github.event_name }}' has no PR base ref to diff against -- skipping intentionally, not a failure. This gate only runs on pull_request."

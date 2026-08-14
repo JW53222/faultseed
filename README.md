@@ -187,6 +187,22 @@ Read one of the `examples/*/run.sh` scripts before you trust the summary
 line — each one is short and shows exactly what JSON it feeds the hook and
 why the expected answer is what it is.
 
+## CI: auditing your own escape markers
+
+Every guard's escape marker requires a *reason* — but nothing downstream
+reviews whether that reason is *true*. `scripts/check_escape_markers.py`
+is a diff-scoped CI/pre-push gate that closes exactly that gap: it audits
+every escape marker **added** in a pull request (or a local branch) and
+fails unless each one is either removed or explicitly acknowledged.
+
+| Check | What it does | Where it runs | Exit codes |
+|---|---|---|---|
+| `check_escape_markers.py` | Extracts every escape marker added in a diff (Tier A); a bare marker fails outright, a reasoned one must be named in an `Escape-Markers: <path>:<line>` commit trailer. Optionally (`ANTHROPIC_API_KEY` set) a cold `claude -p` call adjudicates whether the stated reason matches the diff (Tier B) — ambiguous folds to fail. | `.github/workflows/ci.yml`'s `escape-markers` job, on every `pull_request`; wireable into a local pre-push hook the same way | `0` clean · `1` unacknowledged/bare/Tier-B-fail · `2` diff couldn't be computed |
+
+Full doctrine, the trailer format, the vocabulary table (imported live from
+each guard's own regex, not re-typed), and the scope limits (markdown docs
+are deliberately out of scope — see why): [docs/escape-markers.md](docs/escape-markers.md).
+
 ## The exit-code contract, and the fail-open trap
 
 Exit code 2 blocks. Every other exit code — 0, 1, an uncaught crash landing
