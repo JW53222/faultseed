@@ -398,6 +398,24 @@ toolchain requirements weren't met on the machine that wrote it). Read that
 adapter's README for the exact boundary between what was run and what was
 only read from source — this README does not repeat or upgrade that claim.
 
+## The first 24 hours
+
+Most of what this pack now enforces was not designed in — it was found,
+inside its own first day of existence, by its own methods and by outside
+review, and fixed in public commits on this repo's `main`. Four of the nine
+guards had no test at all when this repo was first assembled. Five
+hard-block patterns in two language tiers let a bare, non-marker comment
+clear a block that was supposed to require a reason. A personal email sat
+in five commits' author/committer fields through four green release scrubs
+because every scrub checked file content, never commit metadata. A README
+worked example printed `exit 2` and actually returned `0`.
+
+None of that is hidden after the fact. [docs/lessons.md](docs/lessons.md)
+names twelve of these traps one by one — the mistake, the real instance
+cited to a commit SHA or file in this repo's own history, the rule it
+produced, and exactly what enforces that rule today. Every citation in it
+resolves; check it with `git show <sha>` rather than trust the prose.
+
 ## License, contributing
 
 [MIT License](LICENSE). To add a guard or change one, read
