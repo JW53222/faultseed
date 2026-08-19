@@ -220,6 +220,58 @@ def test_placeholder_and_noreply_emails_are_not_caught(tmp_path):
     assert result.exit_code == crc.EXIT_CLEAN
 
 
+def test_every_placeholder_domain_suffix_is_actually_exempt(tmp_path):
+    """Each entry in _PLACEHOLDER_EMAIL_DOMAIN_SUFFIXES must really exempt an
+    address under it -- both as a bare domain and with a subdomain.
+
+    The previous test only exercised example.com. That let a suffix-building
+    bug ("." + ".invalid" -> "..invalid") leave the five dot-prefixed RFC 2606
+    entries permanently dead while the check still reported clean, so
+    `tester@example.invalid` in a fixture was flagged as a real leaked
+    address. Driving the constant itself means a new entry cannot be added
+    without being proven to work.
+    """
+    for suffix in crc._PLACEHOLDER_EMAIL_DOMAIN_SUFFIXES:
+        bare = suffix.lstrip(".")
+        for domain in (bare, "example." + bare if "." not in bare else "sub." + bare):
+            addr = "someone@" + domain
+            assert crc._is_placeholder_email_domain(addr), (
+                f"{addr} should be exempt via suffix {suffix!r}"
+            )
+            assert crc._email_matches(addr) == [], (
+                f"{addr} must not be reported as a leaked address"
+            )
+
+
+def test_reserved_tld_address_in_a_fixture_does_not_fail_the_sweep(tmp_path):
+    """End-to-end guard for the same defect at the exit-code level.
+
+    A git-config fixture using an RFC 2606 `.invalid` address is the exact
+    shape that reddened this repo's own release sweep at v0.1.1 while the
+    published surface was clean.
+    """
+    root = tmp_path / "reserved-tld"
+    _write(root, "test_fixture.py",
+           '_git(["config", "user.email", "tester@example.invalid"], root)\n')
+    result = crc.scan(str(root))
+    assert result.exit_code == crc.EXIT_CLEAN, (
+        f"reserved-TLD address wrongly flagged: {result.hits}"
+    )
+
+
+def test_a_real_address_is_still_caught_alongside_reserved_tlds(tmp_path):
+    """The exemption must not have widened into 'no email is ever a leak'."""
+    root = tmp_path / "real-addr"
+    # Built by concatenation so this file stays clean under its own scan --
+    # same reason the noreply fixture above is spelled that way.
+    real = "real.person" + "@" + "gmail.com"
+    _write(root, "notes.md", f"ok: tester@example.invalid\nleak: {real}\n")
+    result = crc.scan(str(root))
+    assert result.exit_code == crc.EXIT_FOUND
+    matched = [h.matched for h in result.hits if h.rule == "email-address"]
+    assert matched == [real], matched
+
+
 def test_private_key_header_shape_is_caught(tmp_path):
     root = tmp_path / "pk"
     leaked = _synthetic_private_key_header()

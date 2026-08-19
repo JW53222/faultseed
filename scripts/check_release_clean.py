@@ -238,9 +238,17 @@ def _is_noreply_email(addr):
 
 
 def _is_placeholder_email_domain(addr):
+    # Entries are written both with and without a leading dot (".invalid" vs
+    # "example.com"), so normalise before comparing. The earlier form built
+    # the suffix as "." + s, which for an already-dotted entry produced a
+    # double dot ("..invalid") that can never match -- so every RFC 2606
+    # entry here except the three bare example.* domains was dead, and
+    # `tester@example.invalid` was reported as a real leaked address. The
+    # test alongside this only covered example.com, which is why the other
+    # five entries could sit broken without anything going red.
     domain = addr.rpartition("@")[2].lower()
-    return any(domain == s or domain.endswith("." + s) or domain == s.lstrip(".")
-               for s in _PLACEHOLDER_EMAIL_DOMAIN_SUFFIXES)
+    bares = (s.lstrip(".") for s in _PLACEHOLDER_EMAIL_DOMAIN_SUFFIXES)
+    return any(domain == b or domain.endswith("." + b) for b in bares)
 
 
 # PEM private-key header. The optional middle group (an alternation, a
