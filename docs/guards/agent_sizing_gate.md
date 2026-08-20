@@ -101,3 +101,10 @@ made, not that the choice was right. The escape-marker check is a substring
 search over the whole prompt string rather than line-anchored like the
 Edit-side markers, so a sentinel embedded anywhere in a long prompt — even
 somewhere that reads oddly out of context — still clears the block.
+
+## The judgment this gate can't make
+
+This gate checks that a tier was named and that a frontier leaf was
+deliberate. Deciding *which* tier the work actually warrants — and whether
+it should be a leaf at all — is a separate discipline:
+[Agent sizing](../agent-sizing.md).

@@ -65,6 +65,13 @@ fire inside directories listed in `docs/audit/audit-scope.yaml`'s
 `engine_dirs`. Read [What this does not do](#what-this-does-not-do) before
 you trust either one on your own repo.
 
+The two sizing gates check that a model tier was *named*, and that a
+frontier-tier leaf was *deliberate* — not that the tier fits the work.
+That judgment is a convention, not a hook:
+[docs/agent-sizing.md](docs/agent-sizing.md) is the decision tree the
+gates can't walk for you, and the measurement that argues for having a
+gate at all.
+
 ### Worked examples
 
 Every command below was run this session, from the repo root, against the

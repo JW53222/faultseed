@@ -117,3 +117,9 @@ directly in the source, but it means a legitimately-computed `model` value
 (e.g. `model: pickModel(taskSize)`) will always need the
 `// workflow-model-ok:` escape, since the hook has no way to evaluate what
 `pickModel` returns.
+
+## The judgment this gate can't make
+
+Same boundary as the `Agent`-side gate: this checks that a `model:` was
+named at each call site, not that it is the right one. The sizing
+discipline itself is in [Agent sizing](../agent-sizing.md).
